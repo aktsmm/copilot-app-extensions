@@ -135,14 +135,28 @@ function score(skill, keywords) {
   return s;
 }
 
-export function searchSkills(index, query, limit = MAX_RESULTS) {
+export function searchSkills(index, query, limit = MAX_RESULTS, { source, category, offset = 0 } = {}) {
   const prio = (id) => SOURCE_PRIORITY[index.sources.find((s) => s.id === id)?.type] ?? 99;
   const keywords = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const scored = index.skills
+    .filter((s) => (!source || s.source === source) && (!category || (s.categories ?? []).includes(category)))
     .map((skill) => ({ skill, score: keywords.length ? score(skill, keywords) : 1 }))
     .filter((x) => x.score > 0)
     .sort((a, b) => prio(a.skill.source) - prio(b.skill.source) || b.score - a.score || a.skill.name.localeCompare(b.skill.name));
-  return { total: scored.length, items: scored.slice(0, limit).map((x) => x.skill) };
+  return { total: scored.length, items: scored.slice(offset, offset + limit).map((x) => x.skill) };
+}
+
+export function getFacets(index) {
+  const src = new Map();
+  const cat = new Map();
+  for (const s of index.skills) {
+    src.set(s.source, (src.get(s.source) ?? 0) + 1);
+    for (const c of s.categories ?? []) cat.set(c, (cat.get(c) ?? 0) + 1);
+  }
+  const sources = [...src].map(([id, count]) => ({ id, count, name: index.sources.find((x) => x.id === id)?.name ?? id }))
+    .sort((a, b) => b.count - a.count);
+  const categories = [...cat].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count).slice(0, 30);
+  return { sources, categories };
 }
 
 export function findSkill(index, name, source) {

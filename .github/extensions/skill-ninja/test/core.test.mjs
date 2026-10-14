@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { loadIndex, searchSkills, installSkill, uninstallSkill, listInstalled, isSafeName, isSafeRelPath } from "../core/core.mjs";
+import { loadIndex, searchSkills, getFacets, installSkill, uninstallSkill, listInstalled, isSafeName, isSafeRelPath } from "../core/core.mjs";
 
 test("path safety", () => {
   assert.equal(isSafeName("../x"), false);
@@ -56,6 +56,19 @@ test("ui server rejects missing token and serves api", async () => {
   } finally {
     ui.server.close();
   }
+});
+
+test("pagination, filters and facets", async () => {
+  const index = await loadIndex();
+  const p1 = searchSkills(index, "", 10);
+  const p2 = searchSkills(index, "", 10, { offset: 10 });
+  assert.equal(p1.items.length, 10);
+  assert.notEqual(p1.items[0].name + p1.items[0].source, p2.items[0].name + p2.items[0].source);
+  const f = getFacets(index);
+  assert.ok(f.sources.length > 1 && f.categories.length > 0);
+  const bySrc = searchSkills(index, "", 5, { source: f.sources[0].id });
+  assert.ok(bySrc.items.every((s) => s.source === f.sources[0].id));
+  assert.equal(bySrc.total, f.sources[0].count);
 });
 
 test("install -> list -> uninstall (live GitHub)", async () => {

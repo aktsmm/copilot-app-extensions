@@ -2,63 +2,154 @@
 import http from "node:http";
 import crypto from "node:crypto";
 import {
-  loadIndex, searchSkills, findSkill, installSkill, uninstallSkill, listInstalled,
+  loadIndex, searchSkills, getFacets, findSkill, installSkill, uninstallSkill, listInstalled, checkUpdates,
 } from "./core.mjs";
 
-const HTML = String.raw`<!doctype html><html lang="ja"><meta charset="utf-8"><title>Skill Ninja</title>
+const PAGE = 24;
+
+const HTML = String.raw`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skill Ninja</title>
 <style>
-:root{color-scheme:light dark;font-family:system-ui,sans-serif}
-body{margin:0;padding:12px;max-width:900px}
-h1{font-size:18px;margin:0 0 8px}
-.bar{display:flex;gap:6px;margin-bottom:8px}
-input,select,button{font:inherit;padding:5px 8px}
-input{flex:1}
-.tabs button{margin-right:4px}.tabs button.on{font-weight:700;text-decoration:underline}
-.item{border:1px solid #8884;border-radius:6px;padding:8px;margin:6px 0}
-.item b{font-size:14px}.src{opacity:.6;font-size:12px;margin-left:6px}
-.desc{font-size:13px;margin:4px 0;opacity:.85}
-#msg{min-height:18px;font-size:13px;margin:4px 0}.err{color:#d33}
+:root{color-scheme:light dark;--bd:#8884;--mut:#8a8a8a;--ac:#2f81f7;--ok:#2da44e;--bad:#d1242f;font-family:system-ui,"Segoe UI",sans-serif;font-size:14px}
+*{box-sizing:border-box}
+body{margin:0;padding:0 14px 40px}
+header{position:sticky;top:0;background:Canvas;padding:12px 0 8px;z-index:5;border-bottom:1px solid var(--bd)}
+h1{font-size:17px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
+h1 small{font-weight:400;color:var(--mut);font-size:12px}
+.row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
+input,select,button{font:inherit;padding:6px 10px;border:1px solid var(--bd);border-radius:6px;background:Field;color:FieldText}
+input{flex:1;min-width:160px}
+button{cursor:pointer}button:hover:not(:disabled){border-color:var(--ac)}button:disabled{opacity:.5;cursor:default}
+.tabs{display:flex;gap:2px}.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 12px}
+.tabs button.on{border-bottom-color:var(--ac);font-weight:600}
+.seg{display:inline-flex}.seg button{border-radius:0}.seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0;border-left:0}
+.seg button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
+.primary{background:var(--ac);color:#fff;border-color:var(--ac)}
+.danger{color:var(--bad)}
+.card{border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin:8px 0;display:flex;gap:12px;align-items:flex-start}
+.card .main{flex:1;min-width:0}
+.name{font-weight:600;font-size:14px;word-break:break-all}
+.tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;border:1px solid var(--bd);color:var(--mut);margin:0 4px 0 0}
+.tag.ok{color:var(--ok);border-color:var(--ok)}.tag.upd{color:#bf8700;border-color:#bf8700}
+.desc{margin:4px 0;color:var(--mut);font-size:13px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.act{display:flex;flex-direction:column;gap:4px;align-items:stretch;min-width:92px}
+.meta{font-size:12px;color:var(--mut)}
+a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
+#toast{position:fixed;left:14px;right:14px;bottom:12px;padding:8px 12px;border-radius:8px;background:#1f2328;color:#fff;display:none;z-index:9;font-size:13px}
+#toast.err{background:var(--bad)}#toast.ok{background:var(--ok)}
+.empty{padding:30px;text-align:center;color:var(--mut)}
+.spin{display:inline-block;width:12px;height:12px;border:2px solid var(--bd);border-top-color:var(--ac);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
+@keyframes s{to{transform:rotate(360deg)}}
 </style>
-<h1>🥷 Skill Ninja</h1>
-<div class="tabs"><button id="t-search" class="on">検索</button><button id="t-inst">インストール済み</button><button id="t-upd">更新確認</button></div>
-<div class="bar"><input id="q" placeholder="キーワード（例: pdf, azure bicep）"><select id="scope"><option value="user">user</option><option value="project">project</option></select><button id="go">検索</button></div>
-<div id="msg"></div><div id="list"></div>
+<header>
+<h1>🥷 Skill Ninja <small id="count"></small></h1>
+<div class="tabs"><button id="t-search" class="on">探す</button><button id="t-inst">インストール済み <span id="n-inst"></span></button><button id="t-upd">更新</button></div>
+<div class="row"><input id="q" type="search" placeholder="キーワードで検索（例: pdf, azure, docx）" autofocus>
+<span class="seg" title="インストール先"><button id="s-user" class="on">user</button><button id="s-project">project</button></span></div>
+<div class="row" id="filters"><select id="src"><option value="">すべてのソース</option></select><select id="cat"><option value="">すべてのカテゴリ</option></select></div>
+</header>
+<div id="list"></div><div id="toast"></div>
 <script>
-const T=new URLSearchParams(location.search).get("t");let tab="search";
-const $=s=>document.querySelector(s),msg=(t,e)=>{$("#msg").textContent=t;$("#msg").className=e?"err":""};
-async function api(p,body){const r=await fetch("/api/"+p+(p.includes("?")?"&":"?")+"t="+T,body?{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}:{});const j=await r.json();if(!r.ok)throw new Error(j.error||r.status);return j}
-const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-function card(s,btn){return '<div class="item"><b>'+esc(s.name)+'</b><span class="src">'+esc(s.source||s.scope||"")+'</span><div class="desc">'+esc((s.description||"").slice(0,220))+'</div>'+btn+'</div>'}
-async function render(){
-  const l=$("#list");l.innerHTML="";
-  try{
-    if(tab==="search"){msg("検索中…");const r=await api("search?q="+encodeURIComponent($("#q").value));msg(r.total+" 件（上位 "+r.items.length+" 件）");
-      l.innerHTML=r.items.map((s,i)=>card(s,'<button data-i="'+i+'" class="ins">Install</button>')).join("");
-      l.querySelectorAll(".ins").forEach(b=>b.onclick=()=>install(r.items[b.dataset.i]));}
-    else if(tab==="inst"){const r=await api("installed");msg(r.items.length+" 件");
-      l.innerHTML=r.items.map((s,i)=>card(s,'<button data-i="'+i+'" class="del">Uninstall</button>')).join("");
-      l.querySelectorAll(".del").forEach(b=>b.onclick=()=>remove(r.items[b.dataset.i]));}
-    else{msg("確認中…");const r=await api("updates");msg(r.items.length?r.items.length+" 件に更新あり":"すべて最新です");
-      l.innerHTML=r.items.map((s,i)=>card(s,'<button data-i="'+i+'" class="upd">Update</button>')).join("");
-      l.querySelectorAll(".upd").forEach(b=>b.onclick=()=>install(r.items[b.dataset.i],true,r.items[b.dataset.i].scope));}
-  }catch(e){msg(e.message,1)}
+const T=new URLSearchParams(location.search).get("t");
+const S={tab:"search",scope:"user",offset:0,installed:[],busy:new Set(),confirm:null,updates:[]};
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+let tt;function toast(m,k){const t=$("#toast");t.textContent=m;t.className=k||"";t.style.display="block";clearTimeout(tt);tt=setTimeout(()=>t.style.display="none",k==="err"?6000:3000)}
+async function api(p,body){const r=await fetch("/api/"+p+(p.includes("?")?"&":"?")+"t="+T,body?{method:"POST",headers:{"content-type":"application/json"},body:JSON.stringify(body)}:{});let j={};try{j=await r.json()}catch{}if(!r.ok)throw new Error(j.error||("HTTP "+r.status));return j}
+const isInst=(name,scope)=>S.installed.some(i=>i.dir===name&&i.scope===scope);
+const key=(n,sc)=>n+"|"+sc;
+async function loadInstalled(){S.installed=(await api("installed")).items;$("#n-inst").textContent=S.installed.length?"("+S.installed.length+")":""}
+function stateOf(s){const here=isInst(s.name,S.scope),other=isInst(s.name,S.scope==="user"?"project":"user");return{here,other}}
+function actions(s){
+  const sc=S.scope,k=key(s.name,sc),busy=S.busy.has(k);
+  if(busy)return '<button disabled><span class="spin"></span>処理中</button>';
+  const st=stateOf(s);
+  if(S.confirm===k)return '<button class="danger" data-a="del-yes" data-n="'+esc(s.name)+'">本当に削除</button><button data-a="del-no">キャンセル</button>';
+  const upd=S.updates.some(u=>u.name===s.name&&u.scope===sc);
+  if(st.here)return (upd?'<button class="primary" data-a="update" data-n="'+esc(s.name)+'" data-s="'+esc(s.source||"")+'">更新</button>':'')+'<button class="danger" data-a="del" data-n="'+esc(s.name)+'">削除</button>';
+  return '<button class="primary" data-a="install" data-n="'+esc(s.name)+'" data-s="'+esc(s.source||"")+'">インストール</button>';
 }
-async function install(s,overwrite,scope){
-  try{msg("インストール中…");const r=await api("install",{name:s.name,source:s.source,scope:scope||$("#scope").value,overwrite:!!overwrite});
-    if(r.status==="exists"){if(confirm(s.name+" は既にあります。上書きしますか？"))return install(s,true,scope);return msg("キャンセル")}
-    msg("インストール完了: "+r.dest)}catch(e){msg(e.message,1)}}
-async function remove(s){if(!confirm(s.name+" ("+s.scope+") を削除しますか？"))return;
-  try{await api("uninstall",{name:s.dir,scope:s.scope});msg("削除しました");render()}catch(e){msg(e.message,1)}}
-function tabTo(t){tab=t;for(const k of["search","inst","upd"])$("#t-"+k).className=k===t?"on":"";render()}
-$("#t-search").onclick=()=>tabTo("search");$("#t-inst").onclick=()=>tabTo("inst");$("#t-upd").onclick=()=>tabTo("upd");
-$("#go").onclick=()=>tabTo("search");$("#q").onkeydown=e=>{if(e.key==="Enter")tabTo("search")};
-render();
+function card(s){
+  const st=stateOf(s),sc=S.scope;
+  const tags=(st.here?'<span class="tag ok">✓ '+sc+' にインストール済み</span>':st.other?'<span class="tag">'+(sc==="user"?"project":"user")+' に導入済み</span>':'')
+    +(S.updates.some(u=>u.name===s.name&&u.scope===sc)?'<span class="tag upd">更新あり</span>':'')
+    +(s.source?'<span class="tag">'+esc(s.source)+'</span>':'')+(s.categories||[]).slice(0,3).map(c=>'<span class="tag">#'+esc(c)+'</span>').join("");
+  const d=s.description?esc(s.description):'<i>説明なし</i>';
+  const link=s.url?' <a href="'+esc(s.url)+'" target="_blank" rel="noopener">GitHub</a>':'';
+  return '<div class="card"><div class="main"><div class="name">'+esc(s.name)+link+'</div><div class="desc">'+d+'</div><div>'+tags+'</div></div><div class="act">'+actions(s)+'</div></div>';
+}
+function bind(items){
+  document.querySelectorAll("[data-a]").forEach(b=>b.onclick=()=>act(b.dataset.a,b.dataset.n,b.dataset.s,items));
+}
+async function act(a,name,source){
+  const sc=S.scope,k=key(name,sc);
+  if(a==="del"){S.confirm=k;return draw()}
+  if(a==="del-no"){S.confirm=null;return draw()}
+  S.confirm=null;S.busy.add(k);draw();
+  try{
+    if(a==="del-yes"){await api("uninstall",{name,scope:sc});toast(name+" を削除しました","ok")}
+    else{const r=await api("install",{name,source,scope:sc,overwrite:a==="update"});toast(name+(a==="update"?" を更新しました":" をインストールしました"),"ok");if(r.status==="exists")toast(name+" は既に存在します")}
+    await loadInstalled();
+    S.updates=S.updates.filter(u=>!(u.name===name&&u.scope===sc));
+  }catch(e){toast(name+": "+e.message,"err")}
+  S.busy.delete(k);draw();
+}
+let view=[],total=0,searchSeq=0;
+function draw(){
+  const l=$("#list");
+  if(S.tab==="search"){
+    if(!view.length){l.innerHTML='<div class="empty">該当するスキルがありません</div>';return}
+    l.innerHTML='<div class="meta">'+total+' 件中 '+view.length+' 件を表示</div>'+view.map(card).join("")+(view.length<total?'<div class="row"><button id="more">さらに表示（残り '+(total-view.length)+'）</button></div>':"");
+    const m=$("#more");if(m)m.onclick=()=>fetchSearch(true);
+  }else if(S.tab==="inst"){
+    const q=$("#q").value.toLowerCase();
+    const items=S.installed.filter(i=>i.scope===S.scope&&(!q||(i.name+" "+i.description).toLowerCase().includes(q)));
+    l.innerHTML=items.length?'<div class="meta">'+S.scope+' に '+items.length+' 件</div>'+items.map(i=>card({name:i.dir,description:i.description,categories:[]})).join(""):'<div class="empty">'+S.scope+' にインストール済みのスキルはありません</div>';
+  }else{
+    l.innerHTML=S.updates.length?S.updates.filter(u=>u.scope===S.scope).map(u=>card({name:u.name,source:u.source,description:"上流の内容が変更されています",categories:[]})).join("")||'<div class="empty">'+S.scope+' に更新はありません</div>':'<div class="empty">更新はありません（更新確認はインストール時の記録があるスキルが対象です）</div>';
+  }
+  bind();
+}
+async function fetchSearch(append){
+  const seq=++searchSeq;if(!append){S.offset=0}
+  if(!append)$("#list").innerHTML='<div class="empty"><span class="spin"></span>検索中…</div>';
+  try{
+    const p=new URLSearchParams({q:$("#q").value,source:$("#src").value,category:$("#cat").value,offset:append?view.length:0,limit:${PAGE}});
+    const r=await api("search?"+p);if(seq!==searchSeq)return;
+    view=append?view.concat(r.items):r.items;total=r.total;draw();
+  }catch(e){if(seq===searchSeq){$("#list").innerHTML='<div class="empty err">'+esc(e.message)+'</div>';toast(e.message,"err")}}
+}
+async function show(tab){
+  S.tab=tab;S.confirm=null;
+  for(const [k,v] of [["search","search"],["inst","inst"],["upd","upd"]])$("#t-"+k).className=tab===v?"on":"";
+  $("#filters").style.display=tab==="search"?"flex":"none";
+  if(tab==="search")return fetchSearch(false);
+  if(tab==="inst"){$("#list").innerHTML='<div class="empty"><span class="spin"></span>読み込み中…</div>';await loadInstalled().catch(e=>toast(e.message,"err"));return draw()}
+  $("#list").innerHTML='<div class="empty"><span class="spin"></span>上流の変更を確認中…</div>';
+  try{S.updates=(await api("updates")).items}catch(e){toast(e.message,"err")}
+  draw();
+}
+function setScope(sc){S.scope=sc;$("#s-user").className=sc==="user"?"on":"";$("#s-project").className=sc==="project"?"on":"";draw()}
+let deb;$("#q").oninput=()=>{clearTimeout(deb);deb=setTimeout(()=>S.tab==="search"?fetchSearch(false):draw(),250)};
+$("#src").onchange=$("#cat").onchange=()=>fetchSearch(false);
+$("#t-search").onclick=()=>show("search");$("#t-inst").onclick=()=>show("inst");$("#t-upd").onclick=()=>show("upd");
+$("#s-user").onclick=()=>setScope("user");$("#s-project").onclick=()=>setScope("project");
+(async()=>{
+  try{
+    const f=await api("facets");
+    $("#count").textContent=f.total+" skills";
+    $("#src").innerHTML+=f.sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.name)+' ('+s.count+')</option>').join("");
+    $("#cat").innerHTML+=f.categories.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.id)+' ('+c.count+')</option>').join("");
+    if(f.categories.length<3)$("#cat").style.display="none";
+    await loadInstalled();
+  }catch(e){toast(e.message,"err")}
+  fetchSearch(false);
+})();
 </script></html>`;
 
 export async function startUiServer(getCwd, onChange = async () => {}) {
   const token = crypto.randomBytes(16).toString("hex");
   const json = (res, code, obj) => {
-    res.writeHead(code, { "content-type": "application/json" });
+    res.writeHead(code, { "content-type": "application/json; charset=utf-8" });
     res.end(JSON.stringify(obj));
   };
   const readBody = (req) =>
@@ -68,8 +159,16 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
         s += c;
         if (s.length > 1e5) reject(new Error("body too large"));
       });
-      req.on("end", () => resolve(s ? JSON.parse(s) : {}));
+      req.on("end", () => {
+        try {
+          resolve(s ? JSON.parse(s) : {});
+        } catch {
+          reject(new Error("invalid JSON"));
+        }
+      });
+      req.on("error", reject);
     });
+  const scopeOf = (v) => (v === "project" ? "project" : "user");
 
   const server = http.createServer(async (req, res) => {
     try {
@@ -81,9 +180,17 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
         return res.end(HTML);
       }
       const index = await loadIndex();
+      const q = url.searchParams;
+      if (url.pathname === "/api/facets") return json(res, 200, { ...getFacets(index), total: index.skills.length });
       if (url.pathname === "/api/search") {
-        const { total, items } = searchSkills(index, url.searchParams.get("q") ?? "", 30);
-        return json(res, 200, { total, items });
+        const limit = Math.min(Math.max(parseInt(q.get("limit")) || PAGE, 1), 100);
+        const offset = Math.max(parseInt(q.get("offset")) || 0, 0);
+        const r = searchSkills(index, q.get("q") ?? "", limit, {
+          source: q.get("source") || undefined,
+          category: q.get("category") || undefined,
+          offset,
+        });
+        return json(res, 200, r);
       }
       if (url.pathname === "/api/installed") {
         const items = (await Promise.all(["user", "project"].map((s) => listInstalled(s, cwd)))).flat();
@@ -92,18 +199,17 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
       if (url.pathname === "/api/updates") return json(res, 200, { items: await checkUpdates(index, cwd) });
       if (req.method === "POST" && url.pathname === "/api/install") {
         const b = await readBody(req);
-        const hits = findSkill(index, b.name, b.source);
+        const hits = findSkill(index, b.name, b.source || undefined);
         if (hits.length !== 1) return json(res, 400, { error: hits.length ? "ambiguous skill" : "skill not found" });
         const src = index.sources.find((s) => s.id === hits[0].source);
         if (!src) return json(res, 400, { error: "unknown source" });
-        const scope = b.scope === "project" ? "project" : "user";
-        const r = await installSkill({ skill: hits[0], source: src, scope, cwd, overwrite: !!b.overwrite });
+        const r = await installSkill({ skill: hits[0], source: src, scope: scopeOf(b.scope), cwd, overwrite: !!b.overwrite });
         if (r.status === "installed") await onChange();
         return json(res, 200, r);
       }
       if (req.method === "POST" && url.pathname === "/api/uninstall") {
         const b = await readBody(req);
-        const r = await uninstallSkill({ name: b.name, scope: b.scope === "project" ? "project" : "user", cwd });
+        const r = await uninstallSkill({ name: b.name, scope: scopeOf(b.scope), cwd });
         if (r.status === "removed") await onChange();
         return json(res, 200, r);
       }

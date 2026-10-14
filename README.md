@@ -5,7 +5,7 @@ GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストー�
 
 ## 機能
 
-- **キャンバス UI**: 検索 / インストール済み一覧 / 更新確認 / Install・Uninstall（右パネル、`skill-ninja` キャンバス）
+- **キャンバス UI**: 探す（ソース絞り込み・ページング・インストール状態の表示）/ インストール済み / 更新。インストール済みは「削除」ボタンに切り替わり、削除は画面内で確認（user / project 切替対応）
 - **ツール**（エージェントから呼び出し可能）
   - `skill_ninja_search_skills` / `skill_ninja_install_skill` / `skill_ninja_uninstall_skill`
   - `skill_ninja_list_skills` / `skill_ninja_recommend_skills`
