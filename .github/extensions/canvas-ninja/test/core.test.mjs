@@ -375,6 +375,12 @@ test("bundled catalog and bundles are valid", async () => {
   assert.ok(j.extensions.filter((e) => e.kind !== "plugin").every((e) => core.isSafeName(e.name)));
   assert.ok((await fs.stat(new URL("../resources/catalog.json", import.meta.url))).size < 400 * 1024);
   const keys = new Set(j.extensions.map((e) => e.key));
+  const ja = JSON.parse(await fs.readFile(new URL("../resources/catalog-ja.json", import.meta.url), "utf8"));
+  for (const e of j.extensions) if (e.description) assert.ok(ja[e.key], `missing ja: ${e.key}`);
+  for (const k of Object.keys(ja)) assert.ok(keys.has(k), `stale ja: ${k}`);
+  const idx = await core.loadIndex();
+  assert.ok(idx.extensions.find((e) => e.key === "github/awesome-copilot:extensions/draw").description_ja);
+  assert.ok(core.searchExtensions(idx, "draw", { ja: {} }).items[0].description_ja);
   const { bundles } = await core.loadBundles();
   assert.ok(bundles.length >= 1);
   for (const b of bundles) {

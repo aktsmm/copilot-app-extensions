@@ -275,7 +275,7 @@ export async function allSources() {
 }
 
 export async function loadIndex() {
-  const [bundled, cache, sources] = await Promise.all([loadBundled(), readCache(), allSources()]);
+  const [bundled, cache, sources, bundledJa] = await Promise.all([loadBundled(), readCache(), allSources(), readJson(path.join(HERE, "..", "resources", "catalog-ja.json"), {})]);
   const byKey = new Map();
   for (const e of bundled.extensions ?? []) byKey.set(e.key, e);
   for (const [sid, c] of Object.entries(cache.sources ?? {})) {
@@ -284,7 +284,7 @@ export async function loadIndex() {
   }
   const c = await loadConfig();
   const ignored = new Set(c.ignored);
-  const extensions = [...byKey.values()].filter((e) => !ignored.has(e.source)).map((e) => ({ kind: "extension", ...e, official: isOfficialRepo(e.repo) }));
+  const extensions = [...byKey.values()].filter((e) => !ignored.has(e.source)).map((e) => ({ kind: "extension", ...e, description_ja: bundledJa[e.key], official: isOfficialRepo(e.repo) }));
   return { sources, extensions, generatedAt: bundled.generatedAt, cache };
 }
 
@@ -309,7 +309,7 @@ function score(e, kws) {
 
 export function searchExtensions(index, query, { source, limit = 24, offset = 0, ja = {}, official = false, kind } = {}) {
   const kws = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
-  let list = index.extensions.map((e) => ({ ...e, description_ja: ja[e.key] }));
+  let list = index.extensions.map((e) => ({ ...e, description_ja: ja[e.key] ?? e.description_ja }));
   if (source) list = list.filter((e) => e.source === source);
   if (official) list = list.filter((e) => e.official);
   if (kind === "plugin") list = list.filter((e) => e.kind === "plugin");
