@@ -9,6 +9,7 @@
 | 拡張 | 概要 | フォルダ |
 | --- | --- | --- |
 | 🥷 **Agent Skills Ninja** | Agent Skills（SKILL.md）の検索・インストール・更新・管理。約 2,060 スキルを同梱し、説明は日本語対応（約 1,870 件）。種別（公式/コミュニティ）での絞り込み、キャンバス UI、VS Code 版との連携つき | [`.github/extensions/skill-ninja`](.github/extensions/skill-ninja/README.md) |
+| 🧩 **Agent Canvas Ninja** | Canvas 拡張と公式プラグイン（Azure / Microsoft など）の検索・リスクレビュー・インストール。レビュー ID に紐づく固定コミットのインストール、おすすめセットとマイセット、日本語 / English、テーマ 8 種 | [`.github/extensions/canvas-ninja`](.github/extensions/canvas-ninja/README.md) |
 
 ## インストール
 

@@ -41,7 +41,7 @@ https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/ca
 
 ```
 node scripts/sync-catalog.mjs
-node --test test/core.test.mjs
+node --test test/*.test.mjs
 ```
 
 CC BY-NC-SA 4.0 — Copyright (c) aktsmm

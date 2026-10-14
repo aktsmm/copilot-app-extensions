@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: 22
       - run: node --check extension.mjs && node --check ui/app.js && node --check core/ui.mjs
-      - run: node --test test/core.test.mjs
+      - run: node --test test/*.test.mjs
 
   skill-ninja:
     runs-on: ubuntu-latest
@@ -32,4 +32,4 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: node --test test/core.test.mjs
+      - run: node --test test/*.test.mjs
