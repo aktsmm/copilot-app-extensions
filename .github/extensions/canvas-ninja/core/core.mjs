@@ -142,7 +142,7 @@ export const setLocalized = (key, text) => mutateConfig((c) => void (c.ja[key] =
 
 // ---------- GitHub ----------
 let fetchImpl = (...a) => globalThis.fetch(...a);
-export const __setFetch = (f) => (fetchImpl = f);
+export const __setFetch = (f) => ((fetchImpl = f), blobCache.clear(), ssoOwners.clear());
 
 let tokenCache;
 export async function getToken() {
@@ -164,7 +164,11 @@ export class GhError extends Error {
   }
 }
 
+// Owners whose org enforces SSO for our token: go anonymous directly instead of burning two requests each time.
+const ssoOwners = new Set();
 async function ghGet(url, accept = "application/vnd.github+json", anon = false) {
+  const owner = /\/repos\/([^/]+)\//.exec(url)?.[1]?.toLowerCase();
+  if (owner && ssoOwners.has(owner)) anon = true;
   const headers = { Accept: accept, "User-Agent": "canvas-ninja-copilot-app", "X-GitHub-Api-Version": "2022-11-28" };
   const token = anon ? "" : await getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -180,7 +184,9 @@ async function ghGet(url, accept = "application/vnd.github+json", anon = false) 
   // A token that is SSO-blocked (or invalid) must not break public repositories: retry anonymously once.
   if (token && (sso || res.status === 401 || (res.status === 403 && remaining !== "0"))) {
     try {
-      return await ghGet(url, accept, true);
+      const r = await ghGet(url, accept, true);
+      if (sso && owner) ssoOwners.add(owner);
+      return r;
     } catch (e) {
       if (e.kind === "notfound") throw new GhError(403, sso ? "sso" : "forbidden", sso ? "組織の SSO 認可が必要です" : "アクセスが拒否されました", { ssoUrl: sso });
       throw e;
@@ -225,7 +231,25 @@ async function getTree(repo, commit) {
   }
   return treeCache.get(k);
 }
-const blobRaw = async (repo, sha) => Buffer.from(await (await ghGet(`${API}/repos/${repo}/git/blobs/${sha}`, "application/vnd.github.raw+json")).arrayBuffer());
+// Blob contents are immutable per sha: cache them. raw.githubusercontent.com does not count against the API rate limit.
+const blobCache = new Map();
+async function blobRaw(repo, sha, hint) {
+  const ck = `${repo}@${sha}`;
+  if (blobCache.has(ck)) return blobCache.get(ck);
+  let buf;
+  if (hint?.commit && hint?.path) {
+    try {
+      const r = await fetchImpl(`https://raw.githubusercontent.com/${repo}/${hint.commit}/${hint.path.split("/").map(encodeURIComponent).join("/")}`, { headers: { "User-Agent": "canvas-ninja-copilot-app" }, signal: AbortSignal.timeout(25000) });
+      if (r.ok) buf = Buffer.from(await r.arrayBuffer());
+    } catch {}
+  }
+  buf ??= Buffer.from(await (await ghGet(`${API}/repos/${repo}/git/blobs/${sha}`, "application/vnd.github.raw+json")).arrayBuffer());
+  if (buf.length < 1024 * 1024) {
+    blobCache.set(ck, buf);
+    if (blobCache.size > 400) blobCache.delete(blobCache.keys().next().value);
+  }
+  return buf;
+}
 
 async function pool(items, n, fn) {
   const out = new Array(items.length);
@@ -267,7 +291,7 @@ export async function scanRepo({ repo, branch, scanPath }) {
   const entries = await pool(dirs.slice(0, MAX_SCAN_PER_SOURCE), 6, async ({ dir, sha }) => {
     let meta = {};
     try {
-      meta = metaOfExtension((await blobRaw(repo, sha)).toString("utf8"));
+      meta = metaOfExtension((await blobRaw(repo, sha, { commit, path: dir ? `${dir}/extension.mjs` : "extension.mjs" })).toString("utf8"));
     } catch (e) {
       if (e.kind === "rate") throw e;
     }
@@ -618,7 +642,7 @@ export async function fetchExtensionFiles(entry, commit) {
       if (b.mode === "120000") return symlinks.push(rel), null;
       if (!isSafeRelPath(rel)) return null;
       if ((b.size ?? 0) > MAX_FILE_BYTES) throw new Error(`${rel} が大きすぎます`);
-      return { rel, data: await blobRaw(entry.repo, b.sha) };
+      return { rel, data: await blobRaw(entry.repo, b.sha, { commit, path: b.path }) };
     })
   ).filter(Boolean);
   const dirTreeSha = prefix ? (tree.tree ?? []).find((e) => e.type === "tree" && e.path === entry.path)?.sha ?? null : tree.sha;
@@ -680,7 +704,7 @@ export async function reviewPlugin(entry) {
     .filter(({ rel, e }) => isSafeRelPath(rel) && TEXT_RE.test(rel) && !/\.test\.|(^|\/)(?:tests?|__tests__|docs)\//.test(rel) && (e.size ?? 0) <= MAX_FILE_BYTES)
     .sort((a, b) => (/extension\.mjs$|plugin\.json$|mcp|hooks/i.test(b.rel) ? 1 : 0) - (/extension\.mjs$|plugin\.json$|mcp|hooks/i.test(a.rel) ? 1 : 0))
     .slice(0, 150);
-  const files = await pool(cand, 6, async ({ e, rel }) => ({ rel, data: await blobRaw(entry.repo, e.sha) }));
+  const files = await pool(cand, 6, async ({ e, rel }) => ({ rel, data: await blobRaw(entry.repo, e.sha, { commit, path: e.path }) }));
   const report = analyzeFiles(files, { kind: "plugin" });
   const contents = summarizePluginTree(tree, entry.path);
   if (all.length > cand.length) report.findings.push({ id: "partial-review", sev: "info", params: { n: cand.length, total: all.length } });

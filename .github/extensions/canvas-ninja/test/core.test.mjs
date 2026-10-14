@@ -62,6 +62,8 @@ test("analyzeFiles: scans helper modules, missing entry, deps and binaries", () 
   assert.ok(r.findings.some((x) => x.id === "needs-npm"));
   assert.ok(r.findings.some((x) => x.id === "binary"));
   assert.ok(!analyzeFiles([f("extension.mjs", SAFE_EXT), f("package.json", '{"dependencies":{"@github/copilot-sdk":"^1"}}')]).findings.some((x) => x.id === "needs-npm"));
+  assert.equal(analyzeFiles([f("extension.mjs", SAFE_EXT), f("assets/lib.min.js", "x=eval('1')")]).risk, "medium");
+  assert.equal(analyzeFiles([f("extension.mjs", SAFE_EXT), f("assets/lib.js", "x=eval('1')")]).risk, "high");
   assert.equal(analyzeFiles([f("extension.mjs", SAFE_EXT), f("a.png", "\u0000")]).risk, "low");
 });
 

@@ -87,7 +87,9 @@ export function analyzeFiles(files, { kind = "extension" } = {}) {
     const text = f.data.toString("utf8");
     for (const r of RULES) {
       const m = r.re.exec(text);
-      if (m) add({ id: r.id, sev: r.sev, file: f.rel, line: lineOf(text, m.index) });
+      // Minified vendor bundles routinely contain eval/Function; flag them but do not escalate.
+      const sev = r.sev === "high" && /\.min\.[cm]?js$/.test(f.rel) && (r.id === "eval" || r.id === "dynamic-require") ? "medium" : r.sev;
+      if (m) add({ id: r.id, sev, file: f.rel, line: lineOf(text, m.index) });
     }
     if (!/\.min\./.test(f.rel) && text.split("\n").some((l) => l.length > 3000)) add({ id: "long-line", sev: "medium", file: f.rel });
   }

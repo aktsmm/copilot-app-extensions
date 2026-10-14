@@ -199,7 +199,7 @@ function renderDetail() {
   let body = "";
   if (S.dtab === "about") {
     const ja = e.description_ja;
-    body = `<p>${esc(e.description || T("d.noDesc"))}</p>${ja && S.lang === "ja" ? `<p>${esc(ja)}</p>` : ""}
+    body = `<p>${esc(descOf(e) || T("d.noDesc"))}</p>
       <dl class="kv"><dt>${T("d.name")}</dt><dd class="mono">${esc(e.name)}</dd><dt>${T("d.repo")}</dt><dd><a href="${esc(repoUrl(e))}" target="_blank" rel="noopener noreferrer">${esc(e.repo)}</a>${e.path ? ` / <span class="mono">${esc(e.path)}</span>` : ""}</dd>
       <dt>${T("d.source")}</dt><dd>${esc(e.source)}${e.official ? ` <span class="tag off">✔ ${T("badge.official")}</span>` : ""}</dd><dt>${T("d.author")}</dt><dd>${esc(e.author || "-")}</dd>
       ${plugin ? `<dt>${T("d.version")}</dt><dd>${esc(e.version || "-")}</dd><dt>${T("d.pinned")}</dt><dd class="mono">${esc((e.sha || e.ref || "-").slice(0, 12))}</dd><dt>${T("d.contents")}</dt><dd>${contentsTags(e.contents)}</dd>`
@@ -280,7 +280,8 @@ async function loadSources() {
 async function reinit() {
   const i = await api("init").catch(() => null);
   if (!i) return;
-  S.facets = i.facets; S.favs = new Set(i.favs); S.pins = new Set(i.pins); S.bundles = i.bundles; S.theme = i.theme;
+  S.facets = i.facets; S.favs = new Set(i.favs); S.pins = new Set(i.pins); S.bundles = i.bundles;
+  if (!S.themeLoaded) { S.theme = i.theme; S.themeLoaded = true; }
   if (i.lang) S.lang = i.lang;
   $("#sub").textContent = `${T("app.sub")} · ${T("app.count", { n: i.total, s: i.sources.length })}`;
 }
