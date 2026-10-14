@@ -6,11 +6,13 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { vscodeIndexCandidates } from "../core/core.mjs";
+import { vscodeIndexCandidates, EXCLUDED_SOURCES } from "../core/core.mjs";
 
 const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "resources", "skill-index.json");
 const UPSTREAM = "repos/aktsmm/vscode-agent-skill-ninja/contents/resources/skill-index.json";
 const PRIVATE_TYPES = new Set(["user-added"]);
+// Sources intentionally dropped from the bundled catalog even if upstream still lists them.
+const EXCLUDED_SOURCES = new Set(["microsoftdocs-agent-skills"]);
 
 const readJson = async (f) => JSON.parse((await fs.readFile(f, "utf8")).replace(/^\uFEFF/, ""));
 const merge = (base, extra) => {
@@ -37,6 +39,9 @@ if (process.argv.includes("--local")) {
   }
 }
 // install_extension rejects files over 1,000,000 bytes: write compact JSON without empty fields.
+index.sources = index.sources.filter((s) => !EXCLUDED_SOURCES.has(s.id));
+index.skills = index.skills.filter((s) => !EXCLUDED_SOURCES.has(s.source));
+index.bundles = (index.bundles ?? []).filter((b) => !EXCLUDED_SOURCES.has(b.source));
 for (const s of index.skills) for (const k of Object.keys(s)) if (s[k] === "" || (Array.isArray(s[k]) && !s[k].length)) delete s[k];
 const json = JSON.stringify(index);
 if (Buffer.byteLength(json) > 990000) throw new Error(`catalog is ${Buffer.byteLength(json)} bytes; install_extension limits files to 1,000,000 bytes`);
