@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="ja" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Canvas Ninja</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">🥷</span>
+    <div><h1>Agent Canvas Ninja</h1><div class="sub" id="sub">Canvas 拡張を探して、レビューして、インストール</div></div>
+    <div class="tools">
+      <select id="theme" title="テーマ" aria-label="テーマ">
+        <option value="auto">🖥 自動</option><option value="dark">🌙 ダーク</option><option value="light">☀ ライト</option>
+        <option value="ninja">🥷 ニンジャ</option><option value="forest">🌲 フォレスト</option><option value="sakura">🌸 サクラ</option>
+      </select>
+      <button id="about" class="ghost" title="このアプリについて" aria-label="このアプリについて">ⓘ</button>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="search" class="on">探す</button>
+    <button data-tab="installed">インストール済み <span class="count" id="n-inst"></span></button>
+    <button data-tab="updates">更新 <span class="count" id="n-upd"></span></button>
+    <button data-tab="sources">ソース <span class="count warn" id="n-prob"></span></button>
+  </nav>
+  <div id="banners"></div>
+</header>
+<main id="main">
+  <section id="listpane" class="pane">
+    <div id="toolbar" class="toolbar"></div>
+    <div id="list" class="list"></div>
+  </section>
+  <aside id="detail" class="detail" hidden></aside>
+</main>
+<div id="toast" role="status"></div>
+<dialog id="dlg"></dialog>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
