@@ -4,20 +4,29 @@ import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { execFile } from "node:child_process";
 import {
-  loadIndex, searchExtensions, getFacets, findExtension, reviewExtension, publicReview, installExtension, uninstallExtension,
-  listInstalled, checkUpdates, fetchReadme, loadConfig, toggleListed, getTheme, setTheme, setLocalized, addSource, removeSource,
+  loadIndex, searchExtensions, getFacets, findExtension, reviewExtension, reviewPlugin, installPlugin, publicReview, installExtension, uninstallExtension,
+  listInstalled, checkUpdates, fetchReadme, loadConfig, toggleListed, getTheme, setTheme, getLang, setLang, loadBundles, setLocalized, addSource, removeSource,
   refreshIndex, staleSources, sourceProblems, setIgnored, setSourceUrl, webSearch, STALE_DAYS, MAX_STALE_PER_RUN, parseGithubUrl,
 } from "./core.mjs";
 
 const UI_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "ui");
 const PAGE = 24;
-const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
+const TYPES = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".mjs": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8" };
 const CSP = "default-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'; frame-ancestors *";
+// Fixed, argument-free-of-user-input checks only.
+const PREREQ = { az: ["az", ["--version"]], "az-login": ["az", ["account", "show", "--query", "name", "-o", "tsv"]] };
+const runPrereq = (id) =>
+  new Promise((resolve) => {
+    const spec = PREREQ[id];
+    if (!spec) return resolve({ id, ok: false });
+    execFile(spec[0], spec[1], { timeout: 15000, windowsHide: true, shell: process.platform === "win32" }, (err) => resolve({ id, ok: !err }));
+  });
 
 const send = (res, code, body, headers = {}) => {
   const isObj = typeof body === "object" && !Buffer.isBuffer(body);
-  res.writeHead(code, { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Content-Security-Policy": CSP, ...(isObj ? { "Content-Type": "application/json; charset=utf-8" } : {}), ...headers });
+  res.writeHead(code, { "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Referrer-Policy": "no-referrer", "Content-Security-Policy": CSP, ...(isObj ? { "Content-Type": "application/json; charset=utf-8" } : {}), ...headers });
   res.end(isObj ? JSON.stringify(body) : body);
 };
 
@@ -43,7 +52,7 @@ const entryOf = async (key, source) => {
   return hits[0];
 };
 
-export async function startUiServer({ cwd, reload, sessionExtensions, askAgent }) {
+export async function startUiServer({ cwd, reload, sessionExtensions, plugins }) {
   const token = crypto.randomBytes(18).toString("hex");
   let port = 0;
   const server = http.createServer(async (req, res) => {
@@ -71,17 +80,26 @@ export async function startUiServer({ cwd, reload, sessionExtensions, askAgent }
     if (!post) {
       switch (route) {
         case "init": {
-          const [index, cfg, theme] = await Promise.all([loadIndex(), loadConfig(), getTheme()]);
-          return { theme, total: index.extensions.length, facets: getFacets(index), sources: index.sources, favs: cfg.favorites, pins: cfg.pins, generatedAt: index.generatedAt, cwd: cwd() };
+          const [index, cfg, theme, lang, bundles] = await Promise.all([loadIndex(), loadConfig(), getTheme(), getLang(), loadBundles()]);
+          return { theme, lang, total: index.extensions.length, facets: getFacets(index), sources: index.sources, favs: cfg.favorites, pins: cfg.pins, generatedAt: index.generatedAt, cwd: cwd(), bundles: bundles.bundles ?? [] };
         }
         case "search": {
           const [index, cfg] = await Promise.all([loadIndex(), loadConfig()]);
           const offset = Number(q.get("offset")) || 0;
-          let r = searchExtensions({ ...index, extensions: q.get("favonly") === "1" ? index.extensions.filter((e) => cfg.favorites.includes(e.key)) : index.extensions }, q.get("q") ?? "", { source: q.get("source") || undefined, limit: 5000, ja: cfg.ja });
+          let r = searchExtensions({ ...index, extensions: q.get("favonly") === "1" ? index.extensions.filter((e) => cfg.favorites.includes(e.key)) : index.extensions }, q.get("q") ?? "", { source: q.get("source") || undefined, limit: 5000, ja: cfg.ja, official: q.get("official") === "1", kind: q.get("kind") || undefined });
           const pinned = r.items.filter((e) => cfg.pins.includes(e.key));
           const items = [...pinned, ...r.items.filter((e) => !cfg.pins.includes(e.key))];
           return { total: r.total, items: items.slice(offset, offset + PAGE), offset, page: PAGE };
         }
+        case "entries": {
+          const index = await loadIndex();
+          const keys = new Set(String(q.get("keys") ?? "").split(",").filter(Boolean).slice(0, 40));
+          return { items: index.extensions.filter((e) => keys.has(e.key)) };
+        }
+        case "plugins":
+          return { items: await plugins.list().catch(() => []) };
+        case "prereq":
+          return await runPrereq(q.get("id"));
         case "installed": {
           const [user, project] = await Promise.all([listInstalled("user", cwd()), listInstalled("project", cwd())]);
           return { items: [...user, ...project] };
@@ -92,7 +110,7 @@ export async function startUiServer({ cwd, reload, sessionExtensions, askAgent }
           return await checkUpdates(cwd());
         case "review": {
           const e = await entryOf(q.get("key"), q.get("source") || undefined);
-          return publicReview(await reviewExtension(e));
+          return publicReview(e.kind === "plugin" ? await reviewPlugin(e) : await reviewExtension(e));
         }
         case "readme":
           return { markdown: await fetchReadme(await entryOf(q.get("key"), q.get("source") || undefined)) };
@@ -107,17 +125,25 @@ export async function startUiServer({ cwd, reload, sessionExtensions, askAgent }
     switch (route) {
       case "install": {
         const e = await entryOf(body.key, body.source);
-        if (!body.treeHash || !body.commit) throw Object.assign(new Error("先にリスクレポートを確認してください"), { code: 400 });
-        return await installExtension({ entry: e, scope: body.scope === "project" ? "project" : "user", cwd: cwd(), overwrite: !!body.overwrite, commit: body.commit, branch: body.branch, expectTreeHash: body.treeHash, acknowledgeRisk: !!body.acknowledge });
+        if (e.kind === "plugin") throw Object.assign(new Error("use install-plugin"), { code: 400 });
+        if (!body.reviewId) throw Object.assign(new Error("review required"), { code: 400, kind: "review" });
+        return await installExtension({ entry: e, scope: body.scope === "project" ? "project" : "user", cwd: cwd(), overwrite: !!body.overwrite, reviewId: body.reviewId, acknowledgeRisk: !!body.acknowledge });
       }
+      case "install-plugin": {
+        const e = await entryOf(body.key, body.source);
+        if (e.kind !== "plugin") throw Object.assign(new Error("not a plugin"), { code: 400 });
+        return await installPlugin({ entry: e, reviewId: body.reviewId, acknowledgeRisk: !!body.acknowledge, plugins });
+      }
+      case "lang":
+        await setLang(String(body.lang));
+        return { ok: true };
       case "uninstall":
         return await uninstallExtension({ name: body.name, scope: body.scope === "project" ? "project" : "user", cwd: cwd(), force: !!body.force });
       case "reload":
         setTimeout(() => reload().catch(() => {}), 400);
         return { ok: true };
       case "ask-agent":
-        await askAgent(String(body.prompt ?? "").slice(0, 2000));
-        return { ok: true };
+        throw Object.assign(new Error("not found"), { code: 404 });
       case "favorite":
         return await toggleListed("favorites", body.key);
       case "pin":

@@ -6,11 +6,18 @@
   --ac:#2f81f7;--acfg:#fff;--ok:#2da44e;--bad:#d1242f;--warn:#bf8700;--hi:color-mix(in srgb,var(--ac) 12%,transparent);
   color-scheme:light dark;font-family:var(--font-sans,system-ui,"Segoe UI",sans-serif);font-size:var(--text-body-medium,14px);
 }
-:root[data-theme=dark]{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;--bd:#30363d;--ac:#388bfd;--ok:#3fb950;--bad:#f85149;--warn:#d29922;color-scheme:dark}
-:root[data-theme=light]{--bg:#fff;--fg:#1f2328;--mut:#656d76;--bd:#d0d7de;color-scheme:light}
-:root[data-theme=ninja]{--bg:#14101f;--fg:#ece6ff;--mut:#a79bc8;--bd:#a78bfa44;--ac:#a855f7;--ok:#34d399;--bad:#fb7185;--warn:#fbbf24;color-scheme:dark}
+:root[data-theme=dark]{--bg:#0d1117;--fg:#e6edf3;--mut:#8b949e;--bd:#30363d;--ac:#388bfd;--acfg:#0d1117;--ok:#3fb950;--bad:#f85149;--warn:#d29922;color-scheme:dark}
+:root[data-theme=light]{--bg:#fff;--fg:#1f2328;--mut:#656d76;--ac:#0969da;--bd:#d0d7de;color-scheme:light}
+:root[data-theme=ninja]{--bg:#14101f;--fg:#ece6ff;--mut:#a79bc8;--bd:#a78bfa44;--ac:#a855f7;--acfg:#14101f;--ok:#34d399;--bad:#fb7185;--warn:#fbbf24;color-scheme:dark}
 :root[data-theme=forest]{--bg:#0f1a14;--fg:#e3f1e8;--mut:#8fb09b;--bd:#6fcf9744;--ac:#22c55e;--acfg:#04210f;--ok:#4ade80;--bad:#f87171;--warn:#facc15;color-scheme:dark}
-:root[data-theme=sakura]{--bg:#fff7f9;--fg:#3b2a30;--mut:#8f6f79;--bd:#e0839f44;--ac:#e0507a;--ok:#2f9e6b;--bad:#c92a4b;--warn:#b7791f;color-scheme:light}
+:root[data-theme=sakura]{--bg:#fff7f9;--fg:#3b2a30;--mut:#7d5b66;--bd:#e0839f44;--ac:#c93a66;--ok:#2f9e6b;--bad:#c92a4b;--warn:#b7791f;color-scheme:light}
+:root[data-theme=ocean]{--bg:#0a1822;--fg:#e1f1fa;--mut:#8fb2c6;--bd:#4cc2e044;--ac:#22b8e0;--acfg:#04202a;--ok:#34d3a0;--bad:#fb7185;--warn:#fbbf24;color-scheme:dark}
+:root[data-theme=sunset]{--bg:#fff8f1;--fg:#3a2a1f;--mut:#7a6350;--bd:#e0944a44;--ac:#b8500a;--ok:#2f9e6b;--bad:#c92a2a;--warn:#b7791f;color-scheme:light}
+.tag.off{color:#2f81f7;border-color:#2f81f7;background:color-mix(in srgb,#2f81f7 12%,transparent);font-weight:600}
+.hint{font-size:12px;color:var(--mut);margin-bottom:4px}
+.bundles{display:grid;grid-template-columns:repeat(auto-fill,minmax(230px,1fr));gap:8px;margin-bottom:10px}
+.bundle{border:1px solid var(--bd);border-radius:12px;padding:10px 12px;background:var(--card)}
+.bhead{display:flex;gap:8px;align-items:center;margin-bottom:4px}.bicon{font-size:20px}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);line-height:1.45}
 button,input,select,textarea{font:inherit;color:inherit}

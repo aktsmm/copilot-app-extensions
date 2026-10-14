@@ -1,19 +1,20 @@
 // Extension: canvas-ninja
-// Discover, review and install Copilot App canvas extensions.
+// Discover, review and install Copilot App canvas extensions and plugins.
 
 import { joinSession, createCanvas } from "@github/copilot-sdk/extension";
 
 import {
-    loadIndex, searchExtensions, findExtension, reviewExtension, publicReview, installExtension, uninstallExtension, listInstalled,
+    loadIndex, searchExtensions, findExtension, reviewExtension, reviewPlugin, installPlugin, installExtension, uninstallExtension, listInstalled,
     checkUpdates, addSource, removeSource, refreshIndex, staleSources, STALE_DAYS, MAX_STALE_PER_RUN, sourceProblems, setIgnored,
     setSourceUrl, webSearch, setLocalized, loadConfig,
 } from "./core/core.mjs";
 import { startUiServer } from "./core/ui.mjs";
+import { t, findingText } from "./ui/i18n.mjs";
 
-const scopeProp = { type: "string", enum: ["user", "project"], description: "user = ~/.copilot/extensions (default), project = <cwd>/.github/extensions" };
+const scopeProp = { type: "string", enum: ["user", "project"], description: "user = ~/.copilot/extensions (default), project = <cwd>/.github/extensions (extensions only)" };
 const fail = (msg) => ({ textResultForLlm: msg, resultType: "failure" });
 const cwdOf = () => process.cwd();
-const fmt = (e) => `- ${e.displayName || e.name} (${e.name}) [${e.source}] ${(e.description || "").slice(0, 140)}`;
+const fmt = (e) => `- ${e.displayName || e.name} (${e.name}) [${e.source}]${e.official ? " [official]" : ""}${e.kind === "plugin" ? " [plugin]" : ""} ${(e.description || "").slice(0, 140)}`;
 
 // Reload is deferred and explicit: it restarts extension processes, including this one.
 const reloadExtensions = async () => {
@@ -27,21 +28,24 @@ const reloadExtensions = async () => {
 };
 
 const sessionExtensions = async () => (await session.rpc.extensions.list()).extensions.map(({ name, source, status }) => ({ name, source, status }));
-const askAgent = async (prompt) => {
-    await session.send({ prompt });
+const plugins = {
+    list: async () => (await session.rpc.plugins.list()).plugins.map(({ name, marketplace, version, enabled }) => ({ name, marketplace, version, enabled })),
+    marketplaces: async () => (await session.rpc.plugins.marketplaces.list()).marketplaces.map((m) => ({ name: m.name })),
+    install: (source) => session.rpc.plugins.install({ source }),
 };
 
 const reviewText = (r) =>
     [
-        `Risk: ${r.risk.toUpperCase()} (heuristic, not a security verdict) — ${r.repo}@${r.commit.slice(0, 7)}, ${r.fileCount} files, tree ${r.treeHash.slice(0, 12)}`,
-        ...r.findings.map((f) => `- [${f.sev}] ${f.label}${f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : ""}`),
-        r.note,
+        `Review ID: ${r.reviewId} (valid 30 min) — ${r.kind} ${r.repo}@${r.commit.slice(0, 7)}, ${r.fileCount} files analyzed`,
+        `Risk: ${r.risk.toUpperCase()} (${t("en", "risk.note")})`,
+        ...(r.contents ? [`Contents: ${r.contents.skills} skills, ${r.contents.agents} agents, ${r.contents.extensions} canvas extension(s), MCP=${r.contents.mcp}, hooks=${r.contents.hooks}`] : []),
+        ...r.findings.map((f) => `- [${f.sev}] ${findingText("en", f)}${f.file ? ` (${f.file}${f.line ? `:${f.line}` : ""})` : ""}`),
     ].join("\n");
 
 const pick = async (name, source) => {
     const index = await loadIndex();
     const hits = findExtension(index, name, source);
-    if (!hits.length) throw new Error(`Extension '${name}' not found in catalog.`);
+    if (!hits.length) throw new Error(`'${name}' not found in catalog.`);
     if (hits.length > 1) throw new Error(`Ambiguous; specify source: ${hits.map((h) => h.source).join(", ")}`);
     return hits[0];
 };
@@ -50,9 +54,9 @@ let ui;
 const canvas = createCanvas({
     id: "canvas-ninja",
     displayName: "Agent Canvas Ninja",
-    description: "Search, review and install Copilot App canvas extensions with a visual UI.",
+    description: "Search, review and install Copilot App canvas extensions and official plugins with a visual UI.",
     open: async () => {
-        ui ??= await startUiServer({ cwd: cwdOf, reload: async () => reloadExtensions(), sessionExtensions, askAgent });
+        ui ??= await startUiServer({ cwd: cwdOf, reload: async () => reloadExtensions(), sessionExtensions, plugins });
         return { url: `http://127.0.0.1:${ui.port}/?t=${ui.token}`, title: "Agent Canvas Ninja" };
     },
     onClose: () => {
@@ -62,7 +66,7 @@ const canvas = createCanvas({
     actions: [
         {
             name: "search",
-            description: "Search the canvas extension catalog.",
+            description: "Search the canvas extension / plugin catalog.",
             inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
             handler: async ({ input }) => searchExtensions(await loadIndex(), input?.query ?? "", { limit: 20 }),
         },
@@ -75,22 +79,23 @@ const session = await joinSession({
     tools: [
         {
             name: "canvas_ninja_search",
-            description: "Search the catalog of Copilot App canvas extensions by keywords, e.g. 'kanban', 'diagram'.",
+            description: "Search the catalog of Copilot App canvas extensions and official plugins by keywords, e.g. 'kanban', 'azure'. official=true limits to GitHub/Microsoft publishers.",
             skipPermission: true,
-            parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" } }, required: ["query"] },
-            handler: async ({ query, limit }) => {
-                const { total, items } = searchExtensions(await loadIndex(), query, { limit: Math.min(limit || 20, 100), ja: (await loadConfig()).ja });
-                return total ? `${total} match(es), showing ${items.length}:\n${items.map(fmt).join("\n")}` : "No extensions found.";
+            parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number" }, official: { type: "boolean" } }, required: ["query"] },
+            handler: async ({ query, limit, official }) => {
+                const { total, items } = searchExtensions(await loadIndex(), query, { limit: Math.min(limit || 20, 100), ja: (await loadConfig()).ja, official: !!official });
+                return total ? `${total} match(es), showing ${items.length}:\n${items.map(fmt).join("\n")}` : "Nothing found.";
             },
         },
         {
             name: "canvas_ninja_review_extension",
-            description: "Fetch a catalog extension at its latest commit and return a heuristic risk report (child_process, env vars, network, fs writes, hooks, ...). Not a security verdict.",
+            description: "Fetch a catalog extension or plugin at a pinned commit and return a heuristic risk report plus a review_id. Not a security verdict. The review_id is required to install.",
             skipPermission: true,
             parameters: { type: "object", properties: { name: { type: "string" }, source: { type: "string" } }, required: ["name"] },
             handler: async ({ name, source }) => {
                 try {
-                    return reviewText(publicReview(await reviewExtension(await pick(name, source))));
+                    const e = await pick(name, source);
+                    return reviewText(e.kind === "plugin" ? await reviewPlugin(e) : await reviewExtension(e));
                 } catch (e) {
                     return fail(String(e.message ?? e));
                 }
@@ -98,25 +103,32 @@ const session = await joinSession({
         },
         {
             name: "canvas_ninja_install_extension",
-            description: "Install a catalog extension (pinned to the reviewed commit). High-risk extensions need acknowledge_risk=true after the user agrees. Existing installs are only replaced when overwrite=true. Extensions load after an extension reload.",
+            description: "Install a catalog extension or plugin that was reviewed with canvas_ninja_review_extension. Requires review_id: exactly the reviewed content is installed. Show the report to the user first. High-risk items also need acknowledge_risk=true after the user agrees. Extensions load after an extension reload; plugins after a new session.",
             parameters: {
                 type: "object",
                 properties: {
                     name: { type: "string" }, source: { type: "string" }, scope: scopeProp,
+                    review_id: { type: "string", description: "From canvas_ninja_review_extension" },
                     overwrite: { type: "boolean", description: "Replace an existing install (confirm with the user first)" },
                     acknowledge_risk: { type: "boolean", description: "Set only after the user reviewed the risk report and agreed" },
                 },
-                required: ["name"],
+                required: ["name", "review_id"],
             },
-            handler: async ({ name, source, scope = "user", overwrite, acknowledge_risk }) => {
+            handler: async ({ name, source, scope = "user", review_id, overwrite, acknowledge_risk }) => {
                 try {
                     const entry = await pick(name, source);
-                    const r = await installExtension({ entry, scope, cwd: cwdOf(), overwrite, acknowledgeRisk: acknowledge_risk });
+                    if (entry.kind === "plugin") {
+                        const r = await installPlugin({ entry, reviewId: review_id, acknowledgeRisk: acknowledge_risk, plugins });
+                        if (r.status === "risk") return fail("High risk — ask the user, then retry with acknowledge_risk=true.");
+                        return `Installed plugin ${entry.pluginSpec}. Start a new session to use it.${r.message ? `\n${r.message}` : ""}${r.warning ? `\n${r.warning}` : ""}`;
+                    }
+                    const r = await installExtension({ entry, scope, cwd: cwdOf(), overwrite, reviewId: review_id, acknowledgeRisk: acknowledge_risk });
                     if (r.status === "exists") return fail(`Already installed at ${r.dest}. Ask the user, then retry with overwrite=true.`);
-                    if (r.status === "risk") return fail(`High risk — not installed.\n${reviewText(r.review)}\nShow this to the user; retry with acknowledge_risk=true only if they agree.`);
+                    if (r.status === "risk") return fail("High risk — show the report to the user; retry with acknowledge_risk=true only if they agree.");
                     await reloadExtensions();
-                    return `Installed '${name}' (${r.fileCount} files, risk ${r.risk}, commit ${r.commit.slice(0, 7)}) to ${r.dest}. Extensions will reload shortly.${r.warnings.length ? `\nNotes: ${r.warnings.join("; ")}` : ""}`;
+                    return `Installed '${name}' (${r.fileCount} files, risk ${r.risk}, commit ${r.commit.slice(0, 7)}) to ${r.dest}. Extensions will reload shortly.${r.warnings.length ? `\nNote: a project extension with the same name takes precedence.` : ""}`;
                 } catch (e) {
+                    if (e.kind === "blocked") return fail(t("en", `confirm.blocked.${e.findingId}`));
                     return fail(String(e.message ?? e));
                 }
             },
@@ -145,16 +157,16 @@ const session = await joinSession({
         },
         {
             name: "canvas_ninja_list_installed",
-            description: "List installed extensions in user and/or project scope, with the live status in this session.",
+            description: "List installed extensions (user/project) with live status, and installed plugins.",
             skipPermission: true,
             parameters: { type: "object", properties: { scope: { ...scopeProp, enum: ["user", "project", "all"] } } },
             handler: async ({ scope = "all" } = {}) => {
                 const scopes = scope === "all" ? ["user", "project"] : [scope];
                 const rows = (await Promise.all(scopes.map((s) => listInstalled(s, cwdOf())))).flat();
                 const live = await sessionExtensions().catch(() => []);
-                return rows.length
-                    ? rows.map((r) => `- ${r.name} (${r.scope}) ${live.find((l) => l.name === r.name && l.source === r.scope)?.status ?? "not loaded"}${r.managed ? "" : " [manual]"} ${r.description.slice(0, 100)}`).join("\n")
-                    : "No installed extensions.";
+                const pl = await plugins.list().catch(() => []);
+                const ext = rows.length ? rows.map((r) => `- ${r.name} (${r.scope}) ${live.find((l) => l.name === r.name && l.source === r.scope)?.status ?? "not loaded"}${r.managed ? "" : " [manual]"} ${r.description.slice(0, 100)}`).join("\n") : "No installed extensions.";
+                return `${ext}\nPlugins: ${pl.length ? pl.map((p) => `${p.name}@${p.marketplace}`).join(", ") : "none"}`;
             },
         },
         {
@@ -165,7 +177,7 @@ const session = await joinSession({
             handler: async () => {
                 const { updates, errors } = await checkUpdates(cwdOf());
                 const tail = errors.length ? `\nErrors:\n${errors.join("\n")}` : "";
-                return (updates.length ? updates.map((u) => `- ${u.name} (${u.scope}) [${u.repo}]`).join("\n") + "\nUpdate with canvas_ninja_install_extension overwrite=true." : "All tracked extensions are up to date.") + tail;
+                return (updates.length ? updates.map((u) => `- ${u.name} (${u.scope}) [${u.repo}]`).join("\n") + "\nReview again and install with overwrite=true." : "All tracked extensions are up to date.") + tail;
             },
         },
         {
@@ -198,7 +210,7 @@ const session = await joinSession({
                 if (stale && !ids.length) return "No stale sources.";
                 const r = await refreshIndex(ids);
                 const i = await loadIndex();
-                return `Scanned ${r.scanned} source(s), ${r.added} new. Catalog: ${i.extensions.length} extensions, ${i.sources.length} sources.${r.errors.length ? `\nErrors:\n${r.errors.join("\n")}` : ""}`;
+                return `Scanned ${r.scanned} source(s), ${r.added} new. Catalog: ${i.extensions.length} entries, ${i.sources.length} sources.${r.errors.length ? `\nErrors:\n${r.errors.join("\n")}` : ""}`;
             },
         },
         {
@@ -245,7 +257,7 @@ const session = await joinSession({
         },
         {
             name: "canvas_ninja_localize",
-            description: "Save a Japanese summary for a catalog extension. Translate its description yourself, then call this.",
+            description: "Save a Japanese summary for a catalog entry. Translate its description yourself, then call this.",
             skipPermission: true,
             parameters: { type: "object", properties: { key: { type: "string", description: "Catalog key, e.g. github/awesome-copilot:extensions/draw" }, text: { type: "string" } }, required: ["key", "text"] },
             handler: async ({ key, text }) => {

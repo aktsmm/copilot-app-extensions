@@ -1,6 +1,7 @@
 // Core logic for Agent Canvas Ninja: catalog, GitHub access, review, install. No UI / SDK dependencies.
 import fs from "node:fs/promises";
 import os from "node:os";
+import crypto from "node:crypto";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
@@ -25,6 +26,7 @@ const MAX_SCAN_PER_SOURCE = 80;
 export const BUNDLED_SOURCES = [
   { id: "awesome-copilot", url: "https://github.com/github/awesome-copilot", scanPath: "extensions", externalList: "extensions/external.json", type: "official", bundled: true },
   { id: "aktsmm", url: "https://github.com/aktsmm/copilot-app-extensions", scanPath: ".github/extensions", type: "community", bundled: true },
+  { id: "awesome-copilot-plugins", url: "https://github.com/github/awesome-copilot", marketplaceFile: ".github/plugin/marketplace.json", marketplaceName: "awesome-copilot", type: "official", bundled: true },
 ];
 
 // ---------- validation ----------
@@ -52,27 +54,49 @@ async function readJson(file, fallback) {
     return fallback;
   }
 }
-async function writeJson(file, data) {
+// All read-modify-write cycles on a state file are serialized; temp names are unique per write.
+const locks = new Map();
+function withLock(file, fn) {
+  const prev = locks.get(file) ?? Promise.resolve();
+  const next = prev.catch(() => {}).then(fn);
+  locks.set(file, next);
+  next.finally(() => locks.get(file) === next && locks.delete(file)).catch(() => {});
+  return next;
+}
+async function writeJsonRaw(file, data) {
   await fs.mkdir(path.dirname(file), { recursive: true });
-  const tmp = `${file}.tmp-${process.pid}`;
+  const tmp = `${file}.tmp-${process.pid}-${crypto.randomUUID()}`;
   await fs.writeFile(tmp, JSON.stringify(data, null, 2));
   await fs.rename(tmp, file);
 }
+const writeJson = (file, data) => withLock(file, () => writeJsonRaw(file, data));
+const updateJson = (file, fallback, fn) =>
+  withLock(file, async () => {
+    const data = await readJson(file, fallback);
+    const r = await fn(data);
+    await writeJsonRaw(file, data);
+    return r;
+  });
 export async function loadConfig() {
   const c = await readJson(CONFIG_PATH, {});
   return { sources: [], favorites: [], pins: [], overrides: {}, ignored: [], failures: {}, ja: {}, ...c };
 }
-const saveConfig = (c) => writeJson(CONFIG_PATH, c);
-async function mutateConfig(fn) {
-  const c = await loadConfig();
+const mutateConfig = (fn) => updateJson(CONFIG_PATH, {}, async (raw) => {
+  const c = { sources: [], favorites: [], pins: [], overrides: {}, ignored: [], failures: {}, ja: {}, ...raw };
   const r = await fn(c);
-  await saveConfig(c);
+  for (const k of Object.keys(raw)) delete raw[k];
+  Object.assign(raw, c);
   return r;
-}
+});
 export const readCache = () => readJson(CACHE_PATH, { sources: {} });
 
 export const getTheme = async () => (await loadConfig()).theme || "auto";
 export const setTheme = (theme) => mutateConfig((c) => void (c.theme = theme));
+export const getLang = async () => (await loadConfig()).lang || "";
+export const setLang = (lang) => mutateConfig((c) => void (c.lang = lang === "en" ? "en" : "ja"));
+export async function loadBundles() {
+  return readJson(path.join(HERE, "..", "resources", "bundles.json"), { bundles: [] });
+}
 export async function toggleListed(field, key) {
   return mutateConfig((c) => {
     const set = new Set(c[field]);
@@ -108,9 +132,9 @@ export class GhError extends Error {
   }
 }
 
-async function ghGet(url, accept = "application/vnd.github+json") {
+async function ghGet(url, accept = "application/vnd.github+json", anon = false) {
   const headers = { Accept: accept, "User-Agent": "canvas-ninja-copilot-app", "X-GitHub-Api-Version": "2022-11-28" };
-  const token = await getToken();
+  const token = anon ? "" : await getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   let res;
   try {
@@ -121,6 +145,15 @@ async function ghGet(url, accept = "application/vnd.github+json") {
   if (res.ok) return res;
   const sso = /url=(\S+)/.exec(res.headers.get("x-github-sso") ?? "")?.[1];
   const remaining = res.headers.get("x-ratelimit-remaining");
+  // A token that is SSO-blocked (or invalid) must not break public repositories: retry anonymously once.
+  if (token && (sso || res.status === 401 || (res.status === 403 && remaining !== "0"))) {
+    try {
+      return await ghGet(url, accept, true);
+    } catch (e) {
+      if (e.kind === "notfound") throw new GhError(403, sso ? "sso" : "forbidden", sso ? "組織の SSO 認可が必要です" : "アクセスが拒否されました", { ssoUrl: sso });
+      throw e;
+    }
+  }
   if (sso) throw new GhError(res.status, "sso", "組織の SSO 認可が必要です", { ssoUrl: sso });
   if (res.status === 429 || (res.status === 403 && remaining === "0")) throw new GhError(res.status, "rate", "GitHub のレート制限に達しました。時間をおくか `gh auth login` してください");
   if (res.status === 401) throw new GhError(401, "auth", "認証に失敗しました（`gh auth login` を確認）");
@@ -251,7 +284,7 @@ export async function loadIndex() {
   }
   const c = await loadConfig();
   const ignored = new Set(c.ignored);
-  const extensions = [...byKey.values()].filter((e) => !ignored.has(e.source));
+  const extensions = [...byKey.values()].filter((e) => !ignored.has(e.source)).map((e) => ({ kind: "extension", ...e, official: isOfficialRepo(e.repo) }));
   return { sources, extensions, generatedAt: bundled.generatedAt, cache };
 }
 
@@ -274,12 +307,15 @@ function score(e, kws) {
   return s;
 }
 
-export function searchExtensions(index, query, { source, limit = 24, offset = 0, ja = {} } = {}) {
+export function searchExtensions(index, query, { source, limit = 24, offset = 0, ja = {}, official = false, kind } = {}) {
   const kws = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   let list = index.extensions.map((e) => ({ ...e, description_ja: ja[e.key] }));
   if (source) list = list.filter((e) => e.source === source);
+  if (official) list = list.filter((e) => e.official);
+  if (kind === "plugin") list = list.filter((e) => e.kind === "plugin");
+  else if (kind === "canvas") list = list.filter((e) => e.kind !== "plugin" || e.hasCanvas);
   let rows = kws.length ? list.map((e) => [e, score(e, kws)]).filter(([, s]) => s > 0) : list.map((e) => [e, 0]);
-  rows.sort((a, b) => b[1] - a[1] || (b[0].stars ?? 0) - (a[0].stars ?? 0) || a[0].name.localeCompare(b[0].name));
+  rows.sort((a, b) => b[1] - a[1] || (b[0].official ? 1 : 0) - (a[0].official ? 1 : 0) || (b[0].stars ?? 0) - (a[0].stars ?? 0) || a[0].name.localeCompare(b[0].name));
   return { total: rows.length, items: rows.slice(offset, offset + limit).map(([e]) => e) };
 }
 
@@ -374,17 +410,24 @@ export async function staleSources(index = null, now = Date.now()) {
 export async function refreshIndex(sourceIds, { limit } = {}) {
   const sources = (await allSources()).filter((s) => !s.ignored && (!sourceIds?.length || sourceIds.includes(s.id)));
   const targets = limit ? sources.slice(0, limit) : sources;
-  const cache = await readCache();
-  cache.sources ??= {};
+  const fresh = {};
+  const prevCache = await readCache();
   const errors = [];
   let scanned = 0;
   let added = 0;
   for (const s of targets) {
     try {
-      const p = parseGithubUrl(s.url);
-      const repo = `${p.owner}/${p.repo}`;
-      const { entries } = await scanRepo({ repo, branch: s.branch, scanPath: s.scanPath });
-      let all = entries.map((e) => ({ ...e, source: s.id }));
+      let all;
+      if (s.marketplaceFile) {
+        const r = await scanMarketplace(s);
+        all = r.entries;
+        errors.push(...r.errors.map((m) => `${s.id}: ${m}`));
+      } else {
+        const p = parseGithubUrl(s.url);
+        const repo = `${p.owner}/${p.repo}`;
+        const { entries } = await scanRepo({ repo, branch: s.branch, scanPath: s.scanPath });
+        all = entries.map((e) => ({ ...e, source: s.id }));
+      }
       if (s.externalList) {
         try {
           const ext = (await readExternalList(s)).filter((x) => typeof x?.installUrl === "string");
@@ -411,8 +454,8 @@ export async function refreshIndex(sourceIds, { limit } = {}) {
           errors.push(`${s.id}: external list: ${e.message}`);
         }
       }
-      const prev = cache.sources[s.id]?.entries?.length ?? 0;
-      cache.sources[s.id] = { scannedAt: new Date().toISOString(), entries: all };
+      const prev = prevCache.sources?.[s.id]?.entries?.length ?? 0;
+      fresh[s.id] = { scannedAt: new Date().toISOString(), entries: all };
       scanned++;
       added += Math.max(0, all.length - prev);
       await clearFailure(s.id);
@@ -422,8 +465,79 @@ export async function refreshIndex(sourceIds, { limit } = {}) {
       await recordFailure(s.id, e);
     }
   }
-  await writeJson(CACHE_PATH, cache);
+  await updateJson(CACHE_PATH, { sources: {} }, (c) => {
+    c.sources ??= {};
+    Object.assign(c.sources, fresh);
+  });
   return { scanned, added, errors };
+}
+
+// ---------- official marketplace (plugins) ----------
+export const OFFICIAL_ORGS = new Set(["github", "microsoft", "azure", "microsoftdocs", "dotnet", "azure-samples"]);
+export const isOfficialRepo = (repo) => OFFICIAL_ORGS.has(String(repo).split("/")[0].toLowerCase());
+const PLUGIN_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
+
+export async function readMarketplace(source) {
+  const p = parseGithubUrl(source.url);
+  const r = await ghGet(`${API}/repos/${p.owner}/${p.repo}/contents/${source.marketplaceFile}`, "application/vnd.github.raw+json");
+  const j = JSON.parse(await r.text());
+  return Array.isArray(j.plugins) ? j.plugins : [];
+}
+
+export function summarizePluginTree(tree, dir) {
+  const prefix = dir ? `${dir}/` : "";
+  const rels = (tree.tree ?? []).filter((e) => e.type === "blob" && e.path.startsWith(prefix)).map((e) => e.path.slice(prefix.length));
+  return {
+    skills: rels.filter((r) => /(^|\/)SKILL\.md$/.test(r)).length,
+    agents: rels.filter((r) => /\.agent\.md$/.test(r)).length,
+    extensions: rels.filter((r) => /(^|\/)extension\.mjs$/.test(r) && !/node_modules\//.test(r)).length,
+    mcp: rels.some((r) => /(^|\/)\.?mcp(\.json|-servers\.json)$/.test(r)),
+    hooks: rels.some((r) => /(^|\/)hooks(\.json|\/)/.test(r)),
+  };
+}
+
+export async function scanMarketplace(source) {
+  const list = await readMarketplace(source);
+  const name = source.marketplaceName;
+  const cand = list.filter((p) => p?.source && typeof p.source === "object" && typeof p.source.repo === "string" && PLUGIN_NAME.test(p.name ?? "") && (isOfficialRepo(p.source.repo) || /canvas/i.test(`${p.name} ${p.description} ${(p.keywords ?? []).join(" ")}`)));
+  const errors = [];
+  const entries = (
+    await pool(cand, 4, async (p) => {
+      try {
+        const { repo, path: dir = "", sha, ref } = p.source;
+        if (dir && !isSafeRelPath(dir)) throw new Error("unsafe path");
+        const { commit } = await resolveCommit(repo, sha || ref);
+        const contents = summarizePluginTree(await getTree(repo, commit), dir);
+        return {
+          key: `plugin:${source.id}/${p.name}`,
+          kind: "plugin",
+          name: p.name,
+          displayName: p.name,
+          description: p.description ?? "",
+          author: p.author?.name || repo.split("/")[0],
+          version: p.version,
+          keywords: p.keywords ?? [],
+          repo,
+          path: dir,
+          sha,
+          ref,
+          marketplace: name,
+          pluginSpec: `${p.name}@${name}`,
+          hasCanvas: contents.extensions > 0 || /canvas/i.test(p.description ?? ""),
+          contents,
+          canvasIds: [],
+          toolCount: 0,
+          stars: 0,
+          source: source.id,
+        };
+      } catch (e) {
+        if (e.kind === "rate") throw e;
+        errors.push(`${p.name}: ${e.message}`);
+        return null;
+      }
+    })
+  ).filter(Boolean);
+  return { entries, errors };
 }
 
 export async function webSearch(query) {
@@ -479,73 +593,130 @@ export async function fetchExtensionFiles(entry, commit) {
   return { files, dirTreeSha, symlinks };
 }
 
-const reviewCache = new Map();
-export async function reviewExtension(entry, { commit: pinned, branch: pinnedBranch } = {}) {
-  const resolved = pinned ? { commit: pinned, branch: pinnedBranch } : await resolveCommit(entry.repo, entry.branch);
-  const ck = `${entry.repo}@${resolved.commit}:${entry.path}`;
-  let hit = reviewCache.get(ck);
-  if (!hit || Date.now() - hit.at > 10 * 60000) {
-    const { files, dirTreeSha, symlinks } = await fetchExtensionFiles(entry, resolved.commit);
-    const report = analyzeFiles(files);
-    if (symlinks.length) report.findings.push({ id: "symlink", sev: "info", label: `シンボリックリンク ${symlinks.length} 件は取り込みません` });
-    hit = { at: Date.now(), files, dirTreeSha, report };
-    reviewCache.set(ck, hit);
-    if (reviewCache.size > 8) reviewCache.delete(reviewCache.keys().next().value);
-  }
+// Reviews are the unit of consent: an install must reference a reviewId, and installs write exactly the reviewed bytes.
+const reviews = new Map();
+const REVIEW_TTL = 30 * 60000;
+function storeReview(rec) {
+  const now = Date.now();
+  for (const [k, v] of reviews) if (v.expires < now) reviews.delete(k);
+  while (reviews.size >= 24) reviews.delete(reviews.keys().next().value);
+  const id = crypto.randomUUID();
+  reviews.set(id, { ...rec, expires: now + REVIEW_TTL });
+  return id;
+}
+export function getReview(reviewId, entryKey) {
+  const r = reviews.get(String(reviewId ?? ""));
+  if (!r || r.expires < Date.now()) throw Object.assign(new Error("レビューの有効期限が切れたか、見つかりません。もう一度レビューしてください"), { code: 400, kind: "review" });
+  if (entryKey && r.entryKey !== entryKey) throw Object.assign(new Error("レビュー対象が一致しません"), { code: 400, kind: "review" });
+  return r;
+}
+
+export async function reviewExtension(entry) {
+  const resolved = await resolveCommit(entry.repo, entry.branch);
+  const { files, dirTreeSha, symlinks } = await fetchExtensionFiles(entry, resolved.commit);
+  const report = analyzeFiles(files);
+  if (symlinks.length) report.findings.push({ id: "symlink", sev: "info", params: { n: symlinks.length } });
+  const rec = { kind: "extension", entryKey: entry.key ?? keyOf(entry), commit: resolved.commit, branch: resolved.branch, dirTreeSha, treeHash: report.treeHash, risk: report.risk, files, report };
+  const reviewId = storeReview(rec);
   return {
-    entryKey: entry.key ?? keyOf(entry),
+    reviewId,
+    kind: "extension",
+    entryKey: rec.entryKey,
     repo: entry.repo,
     path: entry.path,
     commit: resolved.commit,
     branch: resolved.branch,
-    dirTreeSha: hit.dirTreeSha,
-    ...hit.report,
+    dirTreeSha,
+    ...report,
     note: RISK_NOTE,
-    files: hit.files.map((f) => ({ rel: f.rel, size: f.data.length })),
-    _files: hit.files,
+    files: files.map((f) => ({ rel: f.rel, size: f.data.length })),
   };
 }
-export const publicReview = ({ _files, ...r }) => r;
+export const publicReview = (r) => r;
+
+// ---------- plugins (official marketplace) ----------
+const TEXT_RE = /\.(?:m?js|cjs|json|md|ya?ml|sh|ps1|toml)$/i;
+export async function reviewPlugin(entry) {
+  if (entry.kind !== "plugin") throw new Error("not a plugin entry");
+  const ref = entry.sha || entry.ref || entry.branch;
+  const { commit } = await resolveCommit(entry.repo, ref);
+  const tree = await getTree(entry.repo, commit);
+  const prefix = entry.path ? `${entry.path}/` : "";
+  const all = (tree.tree ?? []).filter((e) => e.type === "blob" && e.path.startsWith(prefix) && !/(^|\/)(?:node_modules|\.git)\//.test(e.path));
+  const cand = all
+    .map((e) => ({ e, rel: e.path.slice(prefix.length) }))
+    .filter(({ rel, e }) => isSafeRelPath(rel) && TEXT_RE.test(rel) && !/\.test\.|(^|\/)(?:tests?|__tests__|docs)\//.test(rel) && (e.size ?? 0) <= MAX_FILE_BYTES)
+    .sort((a, b) => (/extension\.mjs$|plugin\.json$|mcp|hooks/i.test(b.rel) ? 1 : 0) - (/extension\.mjs$|plugin\.json$|mcp|hooks/i.test(a.rel) ? 1 : 0))
+    .slice(0, 150);
+  const files = await pool(cand, 6, async ({ e, rel }) => ({ rel, data: await blobRaw(entry.repo, e.sha) }));
+  const report = analyzeFiles(files, { kind: "plugin" });
+  const contents = summarizePluginTree(tree, entry.path);
+  if (all.length > cand.length) report.findings.push({ id: "partial-review", sev: "info", params: { n: cand.length, total: all.length } });
+  const rec = { kind: "plugin", entryKey: entry.key, commit, treeHash: report.treeHash, risk: report.risk, spec: entry.pluginSpec, report, files: [] };
+  const reviewId = storeReview(rec);
+  return { reviewId, kind: "plugin", entryKey: entry.key, repo: entry.repo, path: entry.path, commit, ...report, contents, note: RISK_NOTE, files: files.map((f) => ({ rel: f.rel, size: f.data.length })) };
+}
+
+// Install through the app's native plugin manager (policy-aware). The marketplace must still pin the reviewed commit.
+export async function installPlugin({ entry, reviewId, acknowledgeRisk, plugins }) {
+  const rec = getReview(reviewId, entry.key);
+  if (rec.kind !== "plugin") throw new Error("review kind mismatch");
+  if (rec.risk === "high" && !acknowledgeRisk) return { status: "risk" };
+  const src = (await allSources()).find((s) => s.id === entry.source && s.marketplaceFile);
+  if (!src) throw new Error("marketplace source not found");
+  const fresh = (await readMarketplace(src)).find((p) => p.name === entry.name);
+  const pinned = fresh?.source?.sha || fresh?.source?.ref;
+  if (!fresh || (entry.sha && pinned && pinned !== entry.sha)) throw new Error("マーケットプレイス側の固定コミットが変わりました。再レビューしてください");
+  const mkts = await plugins.marketplaces();
+  if (!mkts.some((m) => m.name === entry.marketplace)) throw new Error(`マーケットプレイス '${entry.marketplace}' が未登録です（Customize > Plugins で追加）`);
+  const r = await plugins.install(entry.pluginSpec);
+  return { status: "installed", message: r.postInstallMessage, skills: r.skillsInstalled, warning: r.deprecationWarning };
+}
 
 // ---------- install / uninstall / list ----------
-export async function installExtension({ entry, scope = "user", cwd = process.cwd(), overwrite = false, commit, branch, expectTreeHash, acknowledgeRisk = false }) {
+export async function installExtension({ entry, scope = "user", cwd = process.cwd(), overwrite = false, reviewId, acknowledgeRisk = false }) {
   const name = entry.name;
   if (!isSafeName(name)) throw new Error(`不正な拡張名: ${name}`);
   const root = extensionsRoot(scope, cwd);
   const dest = path.join(root, name);
   if (!isInside(root, dest)) throw new Error("不正なインストール先");
+  const rec = getReview(reviewId, entry.key ?? keyOf(entry));
+  if (rec.kind !== "extension") throw new Error("review kind mismatch");
   const exists = await fs.stat(dest).then(() => true, () => false);
   if (exists && !overwrite) return { status: "exists", dest };
+  const blocked = rec.report.findings.find((f) => f.id === "no-entry" || f.id === "needs-npm" || f.id === "install-script");
+  if (blocked) throw Object.assign(new Error(`blocked:${blocked.id}`), { kind: "blocked", findingId: blocked.id });
+  if (rec.risk === "high" && !acknowledgeRisk) return { status: "risk", dest, review: { ...rec.report, reviewId } };
 
-  const review = await reviewExtension(entry, { commit, branch });
-  if (expectTreeHash && review.treeHash !== expectTreeHash) {
-    throw new Error("レビュー後に内容が変わりました。もう一度レビューしてください");
-  }
-  if (review.findings.some((f) => f.id === "no-entry")) throw new Error("extension.mjs がないためインストールできません");
-  if (review.risk === "high" && !acknowledgeRisk) return { status: "risk", dest, review: publicReview(review) };
-
-  const tmp = path.join(root, `.canvas-ninja-tmp-${process.pid}-${name}`);
-  await fs.rm(tmp, { recursive: true, force: true });
+  await fs.mkdir(root, { recursive: true });
+  const id = crypto.randomUUID().slice(0, 8);
+  const tmp = path.join(root, `.canvas-ninja-tmp-${id}-${name}`);
+  const backup = path.join(root, `.canvas-ninja-bak-${id}-${name}`);
+  let movedOld = false;
+  let placed = false;
   try {
-    for (const f of review._files) {
+    for (const f of rec.files) {
       const target = path.join(tmp, f.rel);
       if (!isInside(tmp, target)) throw new Error(`パスの外へ出ます: ${f.rel}`);
       await fs.mkdir(path.dirname(target), { recursive: true });
       await fs.writeFile(target, f.data);
     }
-    await fs.rm(dest, { recursive: true, force: true });
+    if (exists) (await fs.rename(dest, backup), (movedOld = true));
     await fs.rename(tmp, dest);
+    placed = true;
+    await updateJson(STATE_PATH, {}, (state) => {
+      state[dest] = { name, key: rec.entryKey, repo: entry.repo, path: entry.path, source: entry.source, commit: rec.commit, branch: rec.branch, dirTreeSha: rec.dirTreeSha, treeHash: rec.treeHash, risk: rec.risk, installedAt: new Date().toISOString() };
+    });
   } catch (e) {
+    if (placed) await fs.rm(dest, { recursive: true, force: true }).catch(() => {});
+    if (movedOld) await fs.rename(backup, dest).catch(() => {});
     await fs.rm(tmp, { recursive: true, force: true }).catch(() => {});
     throw e;
   }
-  const state = await readJson(STATE_PATH, {});
-  state[dest] = { name, key: review.entryKey, repo: entry.repo, path: entry.path, source: entry.source, commit: review.commit, branch: review.branch, dirTreeSha: review.dirTreeSha, treeHash: review.treeHash, risk: review.risk, installedAt: new Date().toISOString() };
-  await writeJson(STATE_PATH, state);
+  if (movedOld) await fs.rm(backup, { recursive: true, force: true }).catch(() => {});
   const warnings = [];
-  if (scope === "user" && (await fs.stat(path.join(cwd, ".github", "extensions", name)).then(() => true, () => false))) warnings.push(`同名のプロジェクト拡張があるため、このプロジェクトではそちらが優先されます`);
-  if (review.findings.some((f) => f.id === "needs-npm")) warnings.push("依存パッケージがあります。拡張フォルダで npm install が必要な場合があります");
-  return { status: "installed", dest, fileCount: review._files.length, risk: review.risk, commit: review.commit, warnings, needsReload: true };
+  if (scope === "user" && (await fs.stat(path.join(cwd, ".github", "extensions", name)).then(() => true, () => false))) warnings.push("shadowed");
+  return { status: "installed", dest, fileCount: rec.files.length, risk: rec.risk, commit: rec.commit, warnings, needsReload: true };
 }
 
 export async function uninstallExtension({ name, scope = "user", cwd = process.cwd(), force = false }) {
@@ -557,8 +728,7 @@ export async function uninstallExtension({ name, scope = "user", cwd = process.c
   const state = await readJson(STATE_PATH, {});
   if (!state[dest] && !force) return { status: "unmanaged", dest };
   await fs.rm(dest, { recursive: true, force: true });
-  delete state[dest];
-  await writeJson(STATE_PATH, state);
+  await updateJson(STATE_PATH, {}, (s) => void delete s[dest]);
   return { status: "removed", dest, needsReload: true };
 }
 
@@ -617,7 +787,7 @@ const readmeCache = new Map();
 export async function fetchReadme(entry) {
   const k = entry.key ?? keyOf(entry);
   if (readmeCache.has(k)) return readmeCache.get(k);
-  const { commit } = await resolveCommit(entry.repo, entry.branch);
+  const { commit } = await resolveCommit(entry.repo, entry.kind === "plugin" ? entry.sha || entry.ref || entry.branch : entry.branch);
   const tries = [];
   if (entry.path) tries.push(`${entry.path}/README.md`, `${entry.path}/readme.md`);
   else tries.push("README.md");
