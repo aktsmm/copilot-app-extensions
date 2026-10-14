@@ -1,12 +1,13 @@
 // Extension: skill-ninja
 // Search, install, and manage Agent Skills (SKILL.md)
 
-import { joinSession } from "@github/copilot-sdk/extension";
+import { joinSession, createCanvas } from "@github/copilot-sdk/extension";
 
 import {
-    loadIndex, searchSkills, findSkill, installSkill, uninstallSkill,
-    listInstalled, recommendSkills, skillsRoot,
+    loadIndex, searchSkills, findSkill, installSkill, uninstallSkill, listInstalled,
+    recommendSkills, skillsRoot, addSource, removeSource, refreshIndex, checkUpdates,
 } from "./core/core.mjs";
+import { startUiServer } from "./core/ui.mjs";
 
 const scopeProp = {
     type: "string", enum: ["user", "project"],
@@ -16,9 +17,66 @@ const fmt = (s) => `- ${s.name} [${s.source}] ${(s.description || "").slice(0, 1
 const fail = (msg) => ({ textResultForLlm: msg, resultType: "failure" });
 const cwdOf = () => process.cwd();
 
+let ui;
+const skillCanvas = createCanvas({
+    id: "skill-ninja",
+    displayName: "Skill Ninja",
+    description: "Search, install, update and uninstall Agent Skills with a visual UI.",
+    open: async () => {
+        ui ??= await startUiServer(cwdOf);
+        return { url: `http://127.0.0.1:${ui.port}/?t=${ui.token}`, title: "Skill Ninja" };
+    },
+    onClose: () => {
+        ui?.server.close();
+        ui = undefined;
+    },
+    actions: [
+        {
+            name: "search",
+            description: "Search the catalog and return matching skills.",
+            inputSchema: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+            handler: async ({ input }) => searchSkills(await loadIndex(), input?.query ?? "", 20),
+        },
+    ],
+});
+
 const session = await joinSession({
     requestedEnvironmentVariables: ["GITHUB_TOKEN"],
+    canvases: [skillCanvas],
     tools: [
+        {
+            name: "skill_ninja_check_updates",
+            description: "List installed skills whose upstream source changed since install.",
+            skipPermission: true,
+            parameters: { type: "object", properties: {} },
+            handler: async () => {
+                const r = await checkUpdates(await loadIndex(), cwdOf());
+                return r.length ? r.map((u) => `- ${u.name} (${u.scope}) [${u.source}]`).join("\n") + "\nReinstall with overwrite=true to update." : "All tracked skills are up to date (skills installed before tracking are not checked).";
+            },
+        },
+        {
+            name: "skill_ninja_add_source",
+            description: "Add a GitHub repository as an extra skill source.",
+            parameters: {
+                type: "object",
+                properties: { id: { type: "string" }, url: { type: "string", description: "https://github.com/owner/repo" }, branch: { type: "string" } },
+                required: ["id", "url"],
+            },
+            handler: async (a) => {
+                try {
+                    await addSource(a);
+                    return `Source '${a.id}' added. Run skill_ninja_update_skill_index to scan it.`;
+                } catch (e) {
+                    return fail(String(e.message ?? e));
+                }
+            },
+        },
+        {
+            name: "skill_ninja_remove_source",
+            description: "Remove a user-added skill source (bundled sources are not affected).",
+            parameters: { type: "object", properties: { id: { type: "string" } }, required: ["id"] },
+            handler: async ({ id }) => ((await removeSource(id)) ? `Removed '${id}'.` : fail(`No user source '${id}'.`)),
+        },
         {
             name: "skill_ninja_search_skills",
             description: "Search the Agent Skills catalog (SKILL.md) by keywords, e.g. 'pdf', 'azure bicep'.",
@@ -107,12 +165,13 @@ const session = await joinSession({
         },
         {
             name: "skill_ninja_update_skill_index",
-            description: "Report catalog status (bundled index date, sources, skill count). Refreshing from sources is not implemented yet.",
+            description: "Scan catalog sources (all, or the given source ids) for new SKILL.md entries and cache them.",
             skipPermission: true,
-            parameters: { type: "object", properties: {} },
-            handler: async () => {
+            parameters: { type: "object", properties: { sources: { type: "array", items: { type: "string" } } } },
+            handler: async ({ sources } = {}) => {
+                const r = await refreshIndex(sources);
                 const i = await loadIndex();
-                return `Catalog updated ${i.lastUpdated}: ${i.skills.length} skills, ${i.sources.length} sources. Live refresh is not implemented in this MVP.`;
+                return `Scan done: ${r.added} new skill(s). Catalog: ${i.skills.length} skills, ${i.sources.length} sources.${r.errors.length ? `\nErrors:\n${r.errors.join("\n")}` : ""}`;
             },
         },
     ],

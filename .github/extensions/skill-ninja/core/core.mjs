@@ -7,7 +7,10 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLED_INDEX = path.join(HERE, "..", "resources", "skill-index.json");
-export const CONFIG_PATH = path.join(os.homedir(), ".copilot", "skill-ninja.json");
+const DATA_DIR = process.env.SKILL_NINJA_HOME || path.join(os.homedir(), ".copilot");
+export const CONFIG_PATH = path.join(DATA_DIR, "skill-ninja.json");
+const STATE_PATH = path.join(DATA_DIR, "skill-ninja-installed.json");
+const CACHE_PATH = path.join(DATA_DIR, "skill-ninja-index-cache.json");
 const SOURCE_PRIORITY = { official: 0, "awesome-list": 1, community: 2 };
 export const MAX_RESULTS = 20;
 
@@ -41,16 +44,77 @@ export async function loadConfig() {
   }
 }
 
+async function readJson(file, fallback) {
+  try {
+    return JSON.parse(await fs.readFile(file, "utf8"));
+  } catch {
+    return fallback;
+  }
+}
+
+async function writeJson(file, data) {
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, JSON.stringify(data, null, 2));
+}
+
+export async function addSource({ id, url, branch, type = "community" }) {
+  if (!isSafeName(id)) throw new Error(`Invalid source id: ${id}`);
+  parseRepo(url);
+  const cfg = await loadConfig();
+  const sources = (cfg.sources ?? []).filter((s) => s.id !== id);
+  sources.push({ id, name: id, url, type, ...(branch ? { branch } : {}), description: "" });
+  await writeJson(CONFIG_PATH, { ...cfg, sources });
+}
+
+export async function removeSource(id) {
+  const cfg = await loadConfig();
+  const before = (cfg.sources ?? []).length;
+  const sources = (cfg.sources ?? []).filter((s) => s.id !== id);
+  await writeJson(CONFIG_PATH, { ...cfg, sources });
+  return before !== sources.length;
+}
+
 // ---------- index ----------
 export async function loadIndex() {
   const index = JSON.parse(await fs.readFile(BUNDLED_INDEX, "utf8"));
   const cfg = await loadConfig();
+  const cache = await readJson(CACHE_PATH, { skills: [] });
   const extraSources = Array.isArray(cfg.sources) ? cfg.sources : [];
+  const skills = [...(index.skills ?? [])];
+  const seen = new Set(skills.map((s) => `${s.source}/${s.path}`));
+  for (const s of cache.skills ?? []) if (!seen.has(`${s.source}/${s.path}`)) skills.push(s);
   return {
     sources: [...(index.sources ?? []), ...extraSources],
-    skills: index.skills ?? [],
-    lastUpdated: index.lastUpdated,
+    skills,
+    lastUpdated: cache.refreshedAt ?? index.lastUpdated,
   };
+}
+
+// Scan source repos for SKILL.md and cache skills missing from the bundled catalog.
+export async function refreshIndex(sourceIds) {
+  const index = await loadIndex();
+  const known = new Set(index.skills.map((s) => `${s.source}/${s.path}`));
+  const cache = await readJson(CACHE_PATH, { skills: [] });
+  const added = [];
+  const errors = [];
+  for (const source of index.sources.filter((s) => !sourceIds?.length || sourceIds.includes(s.id))) {
+    try {
+      const tree = await getTree(source);
+      for (const e of tree.tree ?? []) {
+        if (e.type !== "blob" || !/(^|\/)SKILL\.md$/.test(e.path)) continue;
+        const dir = e.path.replace(/\/?SKILL\.md$/, "");
+        const name = dir.split("/").pop();
+        if (!dir || !isSafeName(name) || known.has(`${source.id}/${dir}`)) continue;
+        known.add(`${source.id}/${dir}`);
+        added.push({ name, source: source.id, path: dir, categories: [], description: "" });
+      }
+    } catch (e) {
+      errors.push(`${source.id}: ${e.message}`);
+    }
+  }
+  const skills = [...(cache.skills ?? []), ...added];
+  await writeJson(CACHE_PATH, { refreshedAt: new Date().toISOString().slice(0, 10), skills });
+  return { added: added.length, errors };
 }
 
 // ---------- search ----------
@@ -114,11 +178,22 @@ export function parseRepo(url) {
   return { owner: m[1], repo: m[2] };
 }
 
+const treeCache = new Map();
+export async function getTree(source, fresh = false) {
+  const { owner, repo } = parseRepo(source.url);
+  const branch = source.branch || "main";
+  const key = `${owner}/${repo}@${branch}`;
+  const hit = treeCache.get(key);
+  if (hit && !fresh && Date.now() - hit.at < 60000) return hit.tree;
+  const tree = await (await ghGet(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`)).json();
+  treeCache.set(key, { at: Date.now(), tree });
+  return tree;
+}
+
 export async function fetchSkillFiles(source, skill) {
   if (!isSafeRelPath(skill.path)) throw new Error(`Unsafe skill path: ${skill.path}`);
   const { owner, repo } = parseRepo(source.url);
-  const branch = source.branch || "main";
-  const tree = await (await ghGet(`https://api.github.com/repos/${owner}/${repo}/git/trees/${encodeURIComponent(branch)}?recursive=1`)).json();
+  const tree = await getTree(source, true);
   const prefix = `${skill.path}/`;
   const blobs = (tree.tree ?? []).filter((e) => e.type === "blob" && e.path.startsWith(prefix));
   if (!blobs.some((b) => b.path === `${prefix}SKILL.md`)) throw new Error(`SKILL.md not found at ${skill.path}`);
@@ -130,6 +205,7 @@ export async function fetchSkillFiles(source, skill) {
     const res = await ghGet(`https://api.github.com/repos/${owner}/${repo}/git/blobs/${b.sha}`, "application/vnd.github.raw+json");
     files.push({ rel, data: Buffer.from(await res.arrayBuffer()) });
   }
+  files.treeSha = (tree.tree ?? []).find((e) => e.type === "tree" && e.path === skill.path)?.sha ?? null;
   return files;
 }
 
@@ -152,7 +228,33 @@ export async function installSkill({ skill, source, scope, cwd, overwrite }) {
   await fs.rm(dest, { recursive: true, force: true });
   await fs.mkdir(root, { recursive: true });
   await fs.rename(tmp, dest);
+  const state = await readJson(STATE_PATH, {});
+  state[dest] = { name: skill.name, source: source.id, path: skill.path, sha: files.treeSha };
+  await writeJson(STATE_PATH, state);
   return { status: "installed", dest, fileCount: files.length };
+}
+
+// Compare recorded tree SHAs of installed skills with the current remote state.
+export async function checkUpdates(index, cwd) {
+  const state = await readJson(STATE_PATH, {});
+  const out = [];
+  for (const scope of ["user", "project"]) {
+    for (const s of await listInstalled(scope, cwd)) {
+      const dest = path.join(skillsRoot(scope, cwd), s.dir);
+      const rec = state[dest];
+      if (!rec?.sha) continue;
+      const source = index.sources.find((x) => x.id === rec.source);
+      if (!source) continue;
+      try {
+        const tree = await getTree(source);
+        const cur = (tree.tree ?? []).find((e) => e.type === "tree" && e.path === rec.path)?.sha;
+        if (cur && cur !== rec.sha) out.push({ name: s.dir, scope, source: rec.source });
+      } catch {
+        // skip unreachable sources
+      }
+    }
+  }
+  return out;
 }
 
 export async function uninstallSkill({ name, scope, cwd }) {
@@ -161,6 +263,11 @@ export async function uninstallSkill({ name, scope, cwd }) {
   const ok = await fs.stat(path.join(dest, "SKILL.md")).then(() => true, () => false);
   if (!ok) return { status: "not-found", dest };
   await fs.rm(dest, { recursive: true, force: true });
+  const state = await readJson(STATE_PATH, {});
+  if (state[dest]) {
+    delete state[dest];
+    await writeJson(STATE_PATH, state);
+  }
   return { status: "removed", dest };
 }
 
