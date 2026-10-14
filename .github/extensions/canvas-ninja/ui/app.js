@@ -97,8 +97,8 @@ function renderToolbar() {
   const tb = $("#toolbar");
   if (S.tab !== "search" && S.tab !== "official") return void (tb.innerHTML = "");
   const srcs = Object.entries(S.facets.sources ?? {});
-  const bundles = S.tab === "official" && S.bundles.length
-    ? `<div class="hint">${T("official.hint")}</div><h3 class="sec">${T("official.bundles")}</h3><div class="bundles">${S.bundles.map((b) => `<div class="bundle"><div class="bhead"><span class="bicon">${esc(b.icon || "📦")}</span><b>${esc(b.name[S.lang] || b.name.en)}</b><span class="tag">${esc(T("bundle.items", { n: b.items.length }))}</span></div><div class="meta">${esc(b.description[S.lang] || b.description.en)}</div><div class="row" style="margin-top:6px"><button class="primary" data-a="bundle" data-id="${esc(b.id)}">${T("bundle.review")}</button></div></div>`).join("")}</div>`
+  const bundles = S.bundles.length
+    ? `${S.tab === "official" ? `<div class="hint">${T("official.hint")}</div>` : ""}<h3 class="sec">${T("official.bundles")}</h3><div class="bundles">${S.bundles.map((b) => `<div class="bundle"><div class="bhead"><span class="bicon">${esc(b.icon || "📦")}</span><b>${esc(b.name[S.lang] || b.name.en)}</b><span class="tag">${esc(T("bundle.items", { n: b.items.length }))}</span></div><div class="meta">${esc(b.description[S.lang] || b.description.en)}</div><div class="row" style="margin-top:6px"><button class="primary" data-a="bundle" data-id="${esc(b.id)}">${T("bundle.review")}</button></div></div>`).join("")}</div>`
     : "";
   tb.innerHTML = `${bundles}<div class="row"><div class="search"><input id="q" type="search" placeholder="${esc(T("search.placeholder"))}" value="${esc(S.q)}" autocomplete="off"></div>
     <span class="seg" title="${esc(T("search.destLabel"))}"><button data-a="scope" data-v="user" class="${S.scope === "user" ? "on" : ""}">user</button><button data-a="scope" data-v="project" class="${S.scope === "project" ? "on" : ""}">project</button></span></div>
