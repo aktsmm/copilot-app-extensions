@@ -17,13 +17,25 @@ const fmt = (s) => `- ${s.name} [${s.source}] ${(s.description || "").slice(0, 1
 const fail = (msg) => ({ textResultForLlm: msg, resultType: "failure" });
 const cwdOf = () => process.cwd();
 
+// Make the running session pick up added/removed skills without a restart.
+const reloadSkills = async () => {
+    // Deferred: the host may restart extensions on reload, which would drop the in-flight response.
+    setTimeout(async () => {
+        try {
+            await session.rpc.skills.reload();
+        } catch (e) {
+            await session.log(`skill reload failed: ${e.message ?? e}`, { level: "warning" }).catch(() => {});
+        }
+    }, 1500);
+};
+
 let ui;
 const skillCanvas = createCanvas({
     id: "skill-ninja",
     displayName: "Skill Ninja",
     description: "Search, install, update and uninstall Agent Skills with a visual UI.",
     open: async () => {
-        ui ??= await startUiServer(cwdOf);
+        ui ??= await startUiServer(cwdOf, reloadSkills);
         return { url: `http://127.0.0.1:${ui.port}/?t=${ui.token}`, title: "Skill Ninja" };
     },
     onClose: () => {
@@ -117,7 +129,8 @@ const session = await joinSession({
                 try {
                     const r = await installSkill({ skill: hits[0], source: src, scope, cwd: cwdOf(), overwrite });
                     if (r.status === "exists") return fail(`Already installed at ${r.dest}. Ask the user, then retry with overwrite=true.`);
-                    return `Installed '${name}' (${r.fileCount} files) to ${r.dest}. It may need /clear or a restart to be picked up.`;
+                    await reloadSkills();
+                    return `Installed '${name}' (${r.fileCount} files) to ${r.dest} and reloaded skills.`;
                 } catch (e) {
                     return fail(String(e.message ?? e));
                 }
@@ -135,6 +148,7 @@ const session = await joinSession({
                 if (!confirm) return fail(`This deletes the '${name}' skill from ${skillsRoot(scope, cwdOf())}. Ask the user, then retry with confirm=true.`);
                 try {
                     const r = await uninstallSkill({ name, scope, cwd: cwdOf() });
+                    if (r.status === "removed") await reloadSkills();
                     return r.status === "removed" ? `Removed ${r.dest}` : fail(`No skill found at ${r.dest}`);
                 } catch (e) {
                     return fail(String(e.message ?? e));

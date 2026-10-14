@@ -55,7 +55,7 @@ $("#go").onclick=()=>tabTo("search");$("#q").onkeydown=e=>{if(e.key==="Enter")ta
 render();
 </script></html>`;
 
-export async function startUiServer(getCwd) {
+export async function startUiServer(getCwd, onChange = async () => {}) {
   const token = crypto.randomBytes(16).toString("hex");
   const json = (res, code, obj) => {
     res.writeHead(code, { "content-type": "application/json" });
@@ -97,11 +97,15 @@ export async function startUiServer(getCwd) {
         const src = index.sources.find((s) => s.id === hits[0].source);
         if (!src) return json(res, 400, { error: "unknown source" });
         const scope = b.scope === "project" ? "project" : "user";
-        return json(res, 200, await installSkill({ skill: hits[0], source: src, scope, cwd, overwrite: !!b.overwrite }));
+        const r = await installSkill({ skill: hits[0], source: src, scope, cwd, overwrite: !!b.overwrite });
+        if (r.status === "installed") await onChange();
+        return json(res, 200, r);
       }
       if (req.method === "POST" && url.pathname === "/api/uninstall") {
         const b = await readBody(req);
-        return json(res, 200, await uninstallSkill({ name: b.name, scope: b.scope === "project" ? "project" : "user", cwd }));
+        const r = await uninstallSkill({ name: b.name, scope: b.scope === "project" ? "project" : "user", cwd });
+        if (r.status === "removed") await onChange();
+        return json(res, 200, r);
       }
       json(res, 404, { error: "not found" });
     } catch (e) {
