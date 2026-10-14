@@ -3,7 +3,59 @@ import assert from "node:assert/strict";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+
+// Never touch the real shared store (%APPDATA%\agent-ninja) from tests.
+process.env.SKILL_NINJA_SHARED_DIR = await fs.mkdtemp(path.join(os.tmpdir(), "sn-shared-"));
+
 import { loadIndex, searchSkills, getFacets, installSkill, uninstallSkill, listInstalled, isSafeName, isSafeRelPath } from "../core/core.mjs";
+
+test("shared sources manifest: read validated, write only if exists, honors lock", async () => {
+  const dir = process.env.SKILL_NINJA_SHARED_DIR;
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
+  process.env.SKILL_NINJA_HOME = home;
+  const core = await import(`../core/core.mjs?shared=${Date.now()}`);
+  const file = path.join(dir, "sources.json");
+  try {
+    await core.addSource({ id: "no-manifest", url: "https://github.com/a/b" });
+    assert.equal(await fs.stat(file).then(() => true, () => false), false);
+    await core.removeSource("no-manifest");
+
+    await fs.writeFile(file, JSON.stringify({
+      schemaVersion: 1, updatedBy: "other.ext", lastUpdated: "x",
+      sources: [
+        { id: "shared-ok", name: "Shared OK", url: "https://github.com/x/shared", type: "user-added", excludePaths: ["a/", "../bad"] },
+        { id: "bad id", url: "https://github.com/x/y" },
+        { id: "bad-url", url: "http://evil.example/x" },
+        { id: "other-field", url: "https://github.com/x/z", extra: { keep: true } },
+      ],
+    }));
+    const idx = await core.loadIndex();
+    const s = idx.sources.find((x) => x.id === "shared-ok");
+    assert.equal(s.origin, "shared");
+    assert.deepEqual(s.excludePaths, ["a/"]);
+    assert.ok(!idx.sources.some((x) => x.id === "bad id" || x.id === "bad-url"));
+
+    assert.equal(await core.addSource({ id: "from-app", url: "https://github.com/me/app" }), "written");
+    let raw = JSON.parse(await fs.readFile(file, "utf8"));
+    assert.ok(raw.sources.some((x) => x.id === "from-app"));
+    assert.ok(raw.sources.find((x) => x.id === "other-field").extra.keep, "unknown fields of other writers survive");
+    assert.equal(raw.updatedBy, "aktsmm.agent-skills-ninja-copilot-app");
+
+    await fs.writeFile(path.join(dir, "index.lock"), "{}");
+    assert.equal(await core.addSource({ id: "while-locked", url: "https://github.com/me/lock" }), "locked");
+    raw = JSON.parse(await fs.readFile(file, "utf8"));
+    assert.ok(!raw.sources.some((x) => x.id === "while-locked"));
+    await fs.rm(path.join(dir, "index.lock"));
+
+    assert.equal(await core.removeSource("shared-ok"), true);
+    raw = JSON.parse(await fs.readFile(file, "utf8"));
+    assert.ok(!raw.sources.some((x) => x.id === "shared-ok"));
+  } finally {
+    delete process.env.SKILL_NINJA_HOME;
+    await fs.rm(file, { force: true });
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
 
 test("path safety", () => {
   assert.equal(isSafeName("../x"), false);
@@ -52,7 +104,7 @@ test("ui server rejects missing token and serves api", async () => {
     assert.equal((await fetch(`http://127.0.0.1:${ui.port}/api/search?q=pdf`)).status, 403);
     const r = await (await fetch(`http://127.0.0.1:${ui.port}/api/search?q=pdf&t=${ui.token}`)).json();
     assert.ok(r.total > 0);
-    assert.match(await (await fetch(`http://127.0.0.1:${ui.port}/?t=${ui.token}`)).text(), /Skill Ninja/);
+    assert.match(await (await fetch(`http://127.0.0.1:${ui.port}/?t=${ui.token}`)).text(), /Agent Skills Ninja/);
   } finally {
     ui.server.close();
   }

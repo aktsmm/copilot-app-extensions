@@ -1,11 +1,11 @@
-# Skill Ninja for GitHub Copilot App
+# Agent Skills Ninja for GitHub Copilot App
 
 GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストール・管理拡張機能です。
 [VS Code 版 Agent Skills Ninja](https://github.com/aktsmm/vscode-agent-skill-ninja) のコアロジックを `vscode` 非依存で移植しています。
 
 ## 機能
 
-- **キャンバス UI**（右パネルの `Skill Ninja`）
+- **キャンバス UI**（右パネルの `Agent Skills Ninja`）
   - 探す: キーワード検索、ソース絞り込み、★のみ表示、24 件ずつのページング、`/` で検索欄にフォーカス
   - インストール状態の表示（「✓ インストール済み」→「削除」ボタン、他スコープ導入済み、手動導入、更新あり）
   - ★お気に入り / 📌ピン留め（ピンは一覧の先頭に表示）
@@ -34,7 +34,7 @@ GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストー�
 
 ## 使い方
 
-Copilot App で「Skill Ninja を開いて」と依頼するとキャンバスが開きます。または `skill_ninja_*` ツールをエージェントに使わせます。
+Copilot App で「Agent Skills Ninja を開いて」と依頼するとキャンバスが開きます。または `skill_ninja_*` ツールをエージェントに使わせます。
 VS Code 版を使っている場合は、ソースタブの「VS Code 版からインポート」で登録済みリポジトリを引き継げます。
 
 ## インストール
@@ -56,6 +56,13 @@ GitHub API のレート制限回避のため、`GITHUB_TOKEN`（承認制の環�
 - スキル名・パスの検証とパストラバーサル対策、一時ディレクトリ経由の原子的配置
 - UI サーバーは `127.0.0.1` のランダムポート＋ランダムトークンで保護
 
+## VS Code 版との共存
+
+- **ソース一覧は共有**: VS Code 版 Agent Skills Ninja が使う共有マニフェスト（Windows: `%APPDATA%\agent-ninja\sources.json`、他 OS: `~/.agent-ninja/sources.json`）を読み込み、登録済みリポジトリをそのまま使えます。このアプリでソースを追加・削除すると、マニフェストが**既にある場合に限り**書き戻します（`index.lock` があれば待避、一時ファイル→rename の原子的書き込み、他拡張が持つ未知のフィールドは保持）。マニフェストが無ければ何も作りません。
+- **スキル本体は共有しない設計**: 両方とも `SKILL.md` を含むフォルダを置くだけです。このアプリは既存フォルダを確認なしに上書きしません。
+- **更新追跡は別管理**: SHA の記録は `~/.copilot/skill-ninja-installed.json` にあり、VS Code 版で入れたスキルは「手動導入」と表示されます（上書き事故は起きません）。
+- 同梱カタログは VS Code 版 `resources/skill-index.json` と同じ形式・同じ出所です。キャッシュ（`~/.copilot/skill-ninja-index-cache.json`）は VS Code 版のものとは別です。
+
 ## 設定・状態ファイル
 
 | ファイル | 用途 |
@@ -70,7 +77,7 @@ GitHub API のレート制限回避のため、`GITHUB_TOKEN`（承認制の環�
 
 - インストール/削除後は拡張が `session.rpc.skills.reload()` を自動実行し、再起動なしで認識されます（実機確認済み）。
 - キャンバス API は experimental です。
-- 更新検知の対象は Skill Ninja で導入したスキルのみです（手動導入は「手動導入」と表示）。
+- 更新検知の対象は Agent Skills Ninja で導入したスキルのみです（手動導入は「手動導入」と表示）。
 - GitHub API を使うため、未認証だとレート制限に当たります。`gh auth login` 済みなら自動で使います。
 - 再スキャンで見つかった新規スキルの説明文は、カードを表示したときに `SKILL.md` から補完されます。
 

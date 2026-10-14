@@ -1,4 +1,4 @@
-// Local web UI for the Skill Ninja canvas. Bound to 127.0.0.1 and protected by a random token.
+// Local web UI for the Agent Skills Ninja canvas. Bound to 127.0.0.1 and protected by a random token.
 import http from "node:http";
 import crypto from "node:crypto";
 import {
@@ -10,7 +10,7 @@ import {
 
 const PAGE = 24;
 
-const HTML = String.raw`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Skill Ninja</title>
+const HTML = String.raw`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Skills Ninja</title>
 <style>
 :root{color-scheme:light dark;--bd:#8884;--mut:#8a8a8a;--ac:#2f81f7;--ok:#2da44e;--bad:#d1242f;font-family:system-ui,"Segoe UI",sans-serif;font-size:14px}
 *{box-sizing:border-box}
@@ -44,7 +44,7 @@ a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 @keyframes s{to{transform:rotate(360deg)}}
 </style>
 <header>
-<h1>🥷 Skill Ninja <small id="count"></small></h1>
+<h1>🥷 Agent Skills Ninja <small id="count"></small></h1>
 <div class="tabs"><button id="t-search" class="on">探す</button><button id="t-rec">おすすめ</button><button id="t-inst">インストール済み <span id="n-inst"></span></button><button id="t-upd">更新</button><button id="t-src">ソース</button></div>
 <div class="row"><input id="q" type="search" placeholder="キーワードで検索（例: pdf, azure, docx）" autofocus>
 <span class="seg" title="インストール先"><button id="s-user" class="on">user</button><button id="s-project">project</button></span>
@@ -79,7 +79,7 @@ function card(s){
   const st=stateOf(s),sc=S.scope,fk=(s.source||"")+"/"+s.name,fav=S.favs.has(fk);
   const inst=S.installed.find(i=>i.dir===s.name&&i.scope===sc);
   const tags=(st.here?'<span class="tag ok">✓ '+sc+' にインストール済み</span>':st.other?'<span class="tag">'+(sc==="user"?"project":"user")+' に導入済み</span>':'')
-    +(inst&&!inst.managed?'<span class="tag" title="Skill Ninja 以外で導入されたため更新を追跡しません">手動導入</span>':'')
+    +(inst&&!inst.managed?'<span class="tag" title="Agent Skills Ninja 以外で導入されたため更新を追跡しません">手動導入</span>':'')
     +(S.updates.some(u=>u.name===s.name&&u.scope===sc)?'<span class="tag upd">更新あり</span>':'')
     +(s.source?'<span class="tag">'+esc(s.source)+'</span>':'')+(s.categories||[]).slice(0,3).map(c=>'<span class="tag">#'+esc(c)+'</span>').join("");
   const dd=descOf(s);
@@ -189,7 +189,7 @@ function render(){
     return drawSources();
   }else{
     const us=S.updates.filter(u=>u.scope===S.scope);
-    l.innerHTML=us.length?'<div class="row"><button class="primary" data-a="upd-all">すべて更新（'+us.length+'）</button></div>'+us.map(u=>card({name:u.name,source:u.source,description:"上流の内容が変更されています",categories:[]})).join(""):'<div class="empty">'+S.scope+' に更新はありません（更新確認は Skill Ninja で導入したスキルが対象です）</div>';
+    l.innerHTML=us.length?'<div class="row"><button class="primary" data-a="upd-all">すべて更新（'+us.length+'）</button></div>'+us.map(u=>card({name:u.name,source:u.source,description:"上流の内容が変更されています",categories:[]})).join(""):'<div class="empty">'+S.scope+' に更新はありません（更新確認は Agent Skills Ninja で導入したスキルが対象です）</div>';
   }
   bind();
 }
@@ -307,7 +307,7 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
       if (url.pathname === "/api/sources") {
         const cfg = await loadConfig();
         const mine = new Set((cfg.sources ?? []).map((s) => s.id));
-        return json(res, 200, { items: index.sources.map((s) => ({ id: s.id, name: s.name, url: s.url, removable: mine.has(s.id) })) });
+        return json(res, 200, { items: index.sources.map((s) => ({ id: s.id, name: s.name, url: s.url, removable: mine.has(s.id) || s.origin === "shared" })) });
       }
       if (req.method === "POST" && url.pathname === "/api/source") {
         const b = await readBody(req);

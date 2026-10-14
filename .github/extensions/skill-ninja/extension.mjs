@@ -33,11 +33,11 @@ const reloadSkills = async () => {
 let ui;
 const skillCanvas = createCanvas({
     id: "skill-ninja",
-    displayName: "Skill Ninja",
+    displayName: "Agent Skills Ninja",
     description: "Search, install, update and uninstall Agent Skills with a visual UI.",
     open: async () => {
         ui ??= await startUiServer(cwdOf, reloadSkills);
-        return { url: `http://127.0.0.1:${ui.port}/?t=${ui.token}`, title: "Skill Ninja" };
+        return { url: `http://127.0.0.1:${ui.port}/?t=${ui.token}`, title: "Agent Skills Ninja" };
     },
     onClose: () => {
         ui?.server.close();

@@ -1,4 +1,4 @@
-// Skill Ninja core: vscode-independent logic (search / index / GitHub fetch / install / scan).
+// Agent Skills Ninja core: vscode-independent logic (search / index / GitHub fetch / install / scan).
 import { promises as fs } from "node:fs";
 import { execFile } from "node:child_process";
 import os from "node:os";
@@ -57,13 +57,73 @@ async function writeJson(file, data) {
   await fs.writeFile(file, JSON.stringify(data, null, 2));
 }
 
+// ---------- shared sources manifest (cross-extension contract with the VS Code Agent Skills Ninja) ----------
+const SHARED_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
+const SHARED_URL = /^https:\/\/github\.com\/[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
+const SHARED_BRANCH = /^[A-Za-z0-9._\-/]{1,255}$/;
+const SHARED_TOKEN = /^[A-Za-z0-9._-]{1,64}$/;
+const SHARED_MAX_BYTES = 2 * 1024 * 1024;
+const SHARED_MAX_ENTRIES = 500;
+const SHARED_UPDATED_BY = "aktsmm.agent-skills-ninja-copilot-app";
+
+export function sharedDir() {
+  if (process.env.SKILL_NINJA_SHARED_DIR) return process.env.SKILL_NINJA_SHARED_DIR;
+  if (process.platform === "win32" && process.env.APPDATA) return path.join(process.env.APPDATA, "agent-ninja");
+  return path.join(os.homedir(), ".agent-ninja");
+}
+
+const sharedFile = () => path.join(sharedDir(), "sources.json");
+const str = (v, max = 512) => (typeof v === "string" && v.length <= max ? v : undefined);
+
+function sanitizeShared(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  if (!SHARED_ID.test(raw.id ?? "") || !SHARED_URL.test(raw.url ?? "")) return null;
+  const out = { id: raw.id, name: str(raw.name) || raw.id, url: raw.url, type: SHARED_TOKEN.test(raw.type ?? "") ? raw.type : "community", description: str(raw.description) ?? "" };
+  if (SHARED_BRANCH.test(raw.branch ?? "")) out.branch = raw.branch;
+  if (typeof raw.lastIndexedAt === "string" && Number.isFinite(Date.parse(raw.lastIndexedAt))) out.lastIndexedAt = raw.lastIndexedAt;
+  for (const k of ["description_ja", "scanner", "lastIndexedBy"]) if (str(raw[k])) out[k] = raw[k];
+  if (Number.isInteger(raw.repoId)) out.repoId = raw.repoId;
+  for (const k of ["includePaths", "excludePaths"]) {
+    if (Array.isArray(raw[k])) out[k] = raw[k].filter((p) => typeof p === "string" && p.length <= 256 && isSafeRelPath(p.replace(/\/$/, ""))).slice(0, 64);
+  }
+  return out;
+}
+
+// The file is untrusted input: size/entry capped, every entry validated, unknown shapes ignored.
+export async function readSharedSources() {
+  try {
+    const st = await fs.stat(sharedFile());
+    if (st.size > SHARED_MAX_BYTES) return { exists: true, sources: [] };
+    const j = JSON.parse((await fs.readFile(sharedFile(), "utf8")).replace(/^\uFEFF/, ""));
+    if (j?.schemaVersion !== 1 || !Array.isArray(j.sources) || j.sources.length > SHARED_MAX_ENTRIES) return { exists: true, sources: [] };
+    return { exists: true, raw: j, sources: j.sources.map(sanitizeShared).filter(Boolean) };
+  } catch {
+    return { exists: false, sources: [] };
+  }
+}
+
+// Best effort: only touches an existing manifest, skips while another writer holds index.lock, writes atomically.
+async function writeShared(mutate) {
+  const cur = await readSharedSources();
+  if (!cur.exists || !cur.raw) return "skipped";
+  if (await fs.stat(path.join(sharedDir(), "index.lock")).then(() => true, () => false)) return "locked";
+  const sources = mutate(cur.raw.sources.filter((s) => s && typeof s === "object"));
+  if (sources.length > SHARED_MAX_ENTRIES) return "skipped";
+  const tmp = path.join(sharedDir(), `sources.json.tmp-${process.pid}`);
+  await fs.writeFile(tmp, JSON.stringify({ ...cur.raw, schemaVersion: 1, sources, lastUpdated: new Date().toISOString(), updatedBy: SHARED_UPDATED_BY }, null, 2));
+  await fs.rename(tmp, sharedFile());
+  return "written";
+}
+
 export async function addSource({ id, url, branch, type = "community" }) {
   if (!isSafeName(id)) throw new Error(`Invalid source id: ${id}`);
   parseRepo(url);
+  const entry = { id, name: id, url, type, ...(branch ? { branch } : {}), description: "" };
   const cfg = await loadConfig();
   const sources = (cfg.sources ?? []).filter((s) => s.id !== id);
-  sources.push({ id, name: id, url, type, ...(branch ? { branch } : {}), description: "" });
+  sources.push(entry);
   await writeJson(CONFIG_PATH, { ...cfg, sources });
+  return writeShared((list) => (list.some((s) => s.id === id) ? list : [...list, entry])).catch(() => "skipped");
 }
 
 export async function removeSource(id) {
@@ -71,7 +131,9 @@ export async function removeSource(id) {
   const before = (cfg.sources ?? []).length;
   const sources = (cfg.sources ?? []).filter((s) => s.id !== id);
   await writeJson(CONFIG_PATH, { ...cfg, sources });
-  return before !== sources.length;
+  const shared = (await readSharedSources()).sources.some((s) => s.id === id);
+  if (shared) await writeShared((list) => list.filter((s) => s.id !== id)).catch(() => {});
+  return before !== sources.length || shared;
 }
 
 // ---------- index ----------
@@ -79,13 +141,14 @@ export async function loadIndex() {
   const index = JSON.parse(await fs.readFile(BUNDLED_INDEX, "utf8"));
   const cfg = await loadConfig();
   const cache = await readJson(CACHE_PATH, { skills: [] });
+  const shared = (await readSharedSources()).sources.map((s) => ({ ...s, origin: "shared" }));
   const extraSources = Array.isArray(cfg.sources) ? cfg.sources : [];
   const skills = [...(index.skills ?? [])];
   const seen = new Set(skills.map((s) => `${s.source}/${s.path}`));
   for (const s of cache.skills ?? []) if (!seen.has(`${s.source}/${s.path}`)) skills.push(s);
   const sources = [...(index.sources ?? [])];
   const haveSrc = new Set(sources.map((s) => s.id));
-  for (const s of [...(cache.sources ?? []), ...extraSources]) if (!haveSrc.has(s.id)) (haveSrc.add(s.id), sources.push(s));
+  for (const s of [...(cache.sources ?? []), ...extraSources, ...shared]) if (!haveSrc.has(s.id)) (haveSrc.add(s.id), sources.push(s));
   const localized = cfg.localized ?? {};
   const merged = skills.map((s) => (localized[`${s.source}/${s.name}`] ? { ...s, description_ja: localized[`${s.source}/${s.name}`] } : s));
   return {
