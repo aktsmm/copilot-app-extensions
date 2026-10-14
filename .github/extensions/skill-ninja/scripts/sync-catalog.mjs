@@ -36,5 +36,9 @@ if (process.argv.includes("--local")) {
     }
   }
 }
-await fs.writeFile(OUT, JSON.stringify(index, null, 2));
+// install_extension rejects files over 1,000,000 bytes: write compact JSON without empty fields.
+for (const s of index.skills) for (const k of Object.keys(s)) if (s[k] === "" || (Array.isArray(s[k]) && !s[k].length)) delete s[k];
+const json = JSON.stringify(index);
+if (Buffer.byteLength(json) > 990000) throw new Error(`catalog is ${Buffer.byteLength(json)} bytes; install_extension limits files to 1,000,000 bytes`);
+await fs.writeFile(OUT, json);
 console.log(`catalog: ${index.sources.length} sources, ${index.skills.length} skills, ${index.bundles.length} bundles (updated ${index.lastUpdated})`);
