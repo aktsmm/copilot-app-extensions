@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const BUNDLED_INDEX = path.join(HERE, "..", "resources", "skill-index.json");
+const PRESET_JA = path.join(HERE, "..", "resources", "ja-descriptions.json");
 const DATA_DIR = process.env.SKILL_NINJA_HOME || path.join(os.homedir(), ".copilot");
 export const CONFIG_PATH = path.join(DATA_DIR, "skill-ninja.json");
 const STATE_PATH = path.join(DATA_DIR, "skill-ninja-installed.json");
@@ -167,7 +168,13 @@ export async function loadIndex() {
     .filter((s) => s && isSafeName(s.id ?? "") && /github\.com\/[^/]+\/[^/]+/.test(s.url ?? ""))
     .map((s) => (overrides[s.id] ? { ...s, ...overrides[s.id], overridden: true } : s));
   const localized = cfg.localized ?? {};
-  const merged = skills.map((s) => (localized[`${s.source}/${s.name}`] ? { ...s, description_ja: localized[`${s.source}/${s.name}`] } : s));
+  // Bundled Japanese summaries live outside skill-index.json (size limit, survives catalog sync); user-saved ones win.
+  const presetJa = await readJson(PRESET_JA, {});
+  const merged = skills.map((s) => {
+    const key = `${s.source}/${s.name}`;
+    const ja = localized[key] || s.description_ja || presetJa[key];
+    return ja ? { ...s, description_ja: ja } : s;
+  });
   return {
     sources: valid,
     skills: merged,
