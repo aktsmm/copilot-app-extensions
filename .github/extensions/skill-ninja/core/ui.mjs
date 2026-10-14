@@ -54,7 +54,7 @@ a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 <div class="row"><input id="q" type="search" placeholder="キーワードで検索（例: pdf, azure, docx）" autofocus>
 <span class="seg" title="インストール先"><button id="s-user" class="on">user</button><button id="s-project">project</button></span>
 <span class="seg" title="説明の言語"><button id="l-ja" class="on">日本語</button><button id="l-en">EN</button></span></div>
-<div class="row" id="filters"><select id="src"><option value="">すべてのソース</option></select><select id="cat"><option value="">すべてのカテゴリ</option></select><label><input id="favonly" type="checkbox" style="flex:none;min-width:0"> ★のみ</label></div>
+<div class="row" id="filters"><select id="typ"><option value="">すべての種別</option></select><select id="src"><option value="">すべてのソース</option></select><select id="cat"><option value="">すべてのカテゴリ</option></select><label><input id="favonly" type="checkbox" style="flex:none;min-width:0"> ★のみ</label></div>
 <div class="meta" id="scopehelp" style="margin-top:6px"></div>
 <div id="stalebar" class="row" style="display:none;background:#bf870022;border-radius:6px;padding:4px 8px"><span id="staletxt"></span><button id="stalego" class="primary">今すぐ更新</button><button id="stalex">後で</button></div>
 <div id="probbar" class="row" style="display:none;background:#d1242f22;border-radius:6px;padding:4px 8px"><span id="probtxt"></span><button id="probgo" class="primary">対応する</button></div>
@@ -239,7 +239,7 @@ async function fetchSearch(append){
   const seq=++searchSeq;if(!append){S.offset=0}
   if(!append)$("#list").innerHTML='<div class="empty"><span class="spin"></span>検索中…</div>';
   try{
-    const p=new URLSearchParams({q:$("#q").value,source:$("#src").value,category:$("#cat").value,fav:$("#favonly").checked?"1":"",offset:append?view.length:0,limit:${PAGE}});
+    const p=new URLSearchParams({q:$("#q").value,source:$("#src").value,type:$("#typ").value,category:$("#cat").value,fav:$("#favonly").checked?"1":"",offset:append?view.length:0,limit:${PAGE}});
     const r=await api("search?"+p);if(seq!==searchSeq)return;
     view=append?view.concat(r.items):r.items;total=r.total;draw();
   }catch(e){if(seq===searchSeq){$("#list").innerHTML='<div class="empty err">'+esc(e.message)+'</div>';toast(e.message,"err")}}
@@ -260,7 +260,7 @@ async function show(tab){
 const SCOPE_HELP={user:"<b>user</b>: あなたの全プロジェクトで使えます（~/.copilot/skills）。個人用はこちら。",project:"<b>project</b>: このリポジトリだけで使えます（.github/skills）。コミットすればチームで共有できます。"};
 function setScope(sc){S.scope=sc;$("#s-user").className=sc==="user"?"on":"";$("#s-project").className=sc==="project"?"on":"";$("#scopehelp").innerHTML=SCOPE_HELP[sc];draw()}
 let deb;$("#q").oninput=()=>{clearTimeout(deb);deb=setTimeout(()=>S.tab==="search"?fetchSearch(false):draw(),250)};
-$("#src").onchange=$("#cat").onchange=()=>fetchSearch(false);
+$("#typ").onchange=$("#src").onchange=$("#cat").onchange=()=>fetchSearch(false);
 $("#about").onclick=()=>show("about");
 $("#theme").value=document.documentElement.dataset.theme;
 $("#theme").onchange=async e=>{const t=e.target.value;document.documentElement.dataset.theme=t;try{await api("theme",{theme:t})}catch(x){toast(x.message,"err")}};
@@ -274,6 +274,8 @@ document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement!=
   try{
     const f=await api("facets");
     $("#count").textContent=f.total+" skills";
+    const TL={official:"公式","awesome-list":"Awesome リスト",community:"コミュニティ"};
+    $("#typ").innerHTML+=f.types.map(t=>'<option value="'+esc(t.id)+'">'+esc(TL[t.id]||t.id)+' ('+t.count+')</option>').join("");
     $("#src").innerHTML+=f.sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.name)+' ('+s.count+')</option>').join("");
     $("#cat").innerHTML+=f.categories.map(c=>'<option value="'+esc(c.id)+'">'+esc(c.id)+' ('+c.count+')</option>').join("");
     if(f.categories.length<3)$("#cat").style.display="none";
@@ -429,7 +431,7 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
         const favs = new Set(await getFavorites());
         const pins = new Set(await getPins());
         const base = q.get("fav") === "1" ? { ...index, skills: index.skills.filter((s) => favs.has(`${s.source}/${s.name}`)) } : index;
-        const opts = { source: q.get("source") || undefined, category: q.get("category") || undefined };
+        const opts = { source: q.get("source") || undefined, category: q.get("category") || undefined, type: q.get("type") || undefined };
         const all = searchSkills(base, q.get("q") ?? "", 100000, opts).items;
         const pinned = all.filter((s) => pins.has(`${s.source}/${s.name}`));
         const sorted = pinned.length ? [...pinned, ...all.filter((s) => !pins.has(`${s.source}/${s.name}`))] : all;

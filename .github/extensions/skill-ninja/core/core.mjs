@@ -184,6 +184,8 @@ export async function loadIndex() {
 }
 
 const UPSTREAM_URL = "https://raw.githubusercontent.com/aktsmm/vscode-agent-skill-ninja/master/resources/skill-index.json";
+// Sources intentionally dropped from the preset catalog even if upstream still lists them.
+export const EXCLUDED_SOURCES = new Set(["microsoftdocs-agent-skills"]);
 
 // Pull the latest catalog published by the VS Code extension and cache whatever the bundled one lacks.
 export async function syncUpstream(fetchImpl = fetch) {
@@ -195,7 +197,7 @@ export async function syncUpstream(fetchImpl = fetch) {
   const haveSrc = new Set(index.sources.map((s) => s.id));
   const sources = [];
   for (const s of up.sources ?? []) {
-    if (s.type === "user-added" || haveSrc.has(s.id) || !isSafeName(s.id)) continue;
+    if (s.type === "user-added" || EXCLUDED_SOURCES.has(s.id) || haveSrc.has(s.id) || !isSafeName(s.id)) continue;
     try {
       parseRepo(s.url);
     } catch {
@@ -408,11 +410,12 @@ function score(skill, keywords) {
   return s;
 }
 
-export function searchSkills(index, query, limit = MAX_RESULTS, { source, category, offset = 0 } = {}) {
-  const prio = (id) => SOURCE_PRIORITY[index.sources.find((s) => s.id === id)?.type] ?? 99;
+export function searchSkills(index, query, limit = MAX_RESULTS, { source, category, type, offset = 0 } = {}) {
+  const typeOf = (id) => index.sources.find((s) => s.id === id)?.type;
+  const prio = (id) => SOURCE_PRIORITY[typeOf(id)] ?? 99;
   const keywords = String(query ?? "").toLowerCase().split(/\s+/).filter(Boolean);
   const scored = index.skills
-    .filter((s) => (!source || s.source === source) && (!category || (s.categories ?? []).includes(category)))
+    .filter((s) => (!source || s.source === source) && (!type || typeOf(s.source) === type) && (!category || (s.categories ?? []).includes(category)))
     .map((skill) => ({ skill, score: keywords.length ? score(skill, keywords) : 1 }))
     .filter((x) => x.score > 0)
     .sort((a, b) => prio(a.skill.source) - prio(b.skill.source) || b.score - a.score || a.skill.name.localeCompare(b.skill.name));
@@ -429,7 +432,13 @@ export function getFacets(index) {
   const sources = [...src].map(([id, count]) => ({ id, count, name: index.sources.find((x) => x.id === id)?.name ?? id }))
     .sort((a, b) => b.count - a.count);
   const categories = [...cat].map(([id, count]) => ({ id, count })).sort((a, b) => b.count - a.count).slice(0, 30);
-  return { sources, categories };
+  const typeCount = new Map();
+  for (const s of index.skills) {
+    const t = index.sources.find((x) => x.id === s.source)?.type;
+    if (t) typeCount.set(t, (typeCount.get(t) ?? 0) + 1);
+  }
+  const types = [...typeCount].map(([id, count]) => ({ id, count })).sort((a, b) => (SOURCE_PRIORITY[a.id] ?? 99) - (SOURCE_PRIORITY[b.id] ?? 99));
+  return { sources, categories, types };
 }
 
 export function findSkill(index, name, source) {
