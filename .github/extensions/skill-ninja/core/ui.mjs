@@ -5,46 +5,51 @@ import {
   loadIndex, searchSkills, getFacets, findSkill, installSkill, uninstallSkill, listInstalled, checkUpdates,
   fetchSkillMd, describeSkill, getFavorites, toggleFavorite, getPins, togglePin, importFromVsCode, recommendSkills, projectContext,
   loadConfig, addSource, removeSource, refreshIndex, staleSources, STALE_DAYS, MAX_STALE_PER_RUN,
-  installBundle, setLocalized, webSearchSkills, createSkill, syncUpstream, sourceProblems, setIgnored, setSourceUrl, readCache as readJsonSafe,
+  installBundle, setLocalized, webSearchSkills, createSkill, syncUpstream, sourceProblems, setIgnored, setSourceUrl, readCache as readJsonSafe, getTheme, setTheme,
 } from "./core.mjs";
 
 const PAGE = 24;
 
-const HTML = String.raw`<!doctype html><html lang="ja"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Skills Ninja</title>
+const HTML = String.raw`<!doctype html><html lang="ja" data-theme="auto"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Skills Ninja</title>
 <style>
-:root{color-scheme:light dark;--bd:#8884;--mut:#8a8a8a;--ac:#2f81f7;--ok:#2da44e;--bad:#d1242f;font-family:system-ui,"Segoe UI",sans-serif;font-size:14px}
+:root{--bg:#fff;--fg:#1f2328;--field:#fff;--bd:#8884;--mut:#6e7781;--ac:#2f81f7;--acfg:#fff;--ok:#2da44e;--bad:#d1242f;--warn:#bf8700;color-scheme:light;font-family:system-ui,"Segoe UI",sans-serif;font-size:14px}
+@media (prefers-color-scheme:dark){:root[data-theme=auto]{--bg:#0d1117;--fg:#e6edf3;--field:#161b22;--mut:#8b949e;--ac:#388bfd;--ok:#3fb950;--bad:#f85149;--warn:#d29922;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#0d1117;--fg:#e6edf3;--field:#161b22;--mut:#8b949e;--ac:#388bfd;--ok:#3fb950;--bad:#f85149;--warn:#d29922;color-scheme:dark}
+:root[data-theme=ninja]{--bg:#14101f;--fg:#ece6ff;--field:#1e1830;--bd:#a78bfa44;--mut:#a79bc8;--ac:#a855f7;--ok:#34d399;--bad:#fb7185;--warn:#fbbf24;color-scheme:dark}
+:root[data-theme=forest]{--bg:#0f1a14;--fg:#e3f1e8;--field:#16261d;--bd:#6fcf9744;--mut:#8fb09b;--ac:#22c55e;--acfg:#04210f;--ok:#4ade80;--bad:#f87171;--warn:#facc15;color-scheme:dark}
+:root[data-theme=sakura]{--bg:#fff7f9;--fg:#3b2a30;--field:#fff;--bd:#e0839f44;--mut:#8f6f79;--ac:#e0507a;--ok:#2f9e6b;--bad:#c92a4b;--warn:#b7791f;color-scheme:light}
 *{box-sizing:border-box}
-body{margin:0;padding:0 14px 40px}
-header{position:sticky;top:0;background:Canvas;padding:12px 0 8px;z-index:5;border-bottom:1px solid var(--bd)}
+body{margin:0;padding:0 14px 40px;background:var(--bg);color:var(--fg)}
+header{position:sticky;top:0;background:var(--bg);padding:12px 0 8px;z-index:5;border-bottom:1px solid var(--bd)}
 h1{font-size:17px;margin:0 0 8px;display:flex;align-items:center;gap:8px}
 h1 small{font-weight:400;color:var(--mut);font-size:12px}
 .row{display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px}
-input,select,button{font:inherit;padding:6px 10px;border:1px solid var(--bd);border-radius:6px;background:Field;color:FieldText}
+input,select,button{font:inherit;padding:6px 10px;border:1px solid var(--bd);border-radius:6px;background:var(--field);color:var(--fg)}
 input{flex:1;min-width:160px}
 button{cursor:pointer}button:hover:not(:disabled){border-color:var(--ac)}button:disabled{opacity:.5;cursor:default}
 .tabs{display:flex;gap:2px}.tabs button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;padding:6px 12px}
 .tabs button.on{border-bottom-color:var(--ac);font-weight:600}
 .seg{display:inline-flex}.seg button{border-radius:0}.seg button:first-child{border-radius:6px 0 0 6px}.seg button:last-child{border-radius:0 6px 6px 0;border-left:0}
-.seg button.on{background:var(--ac);color:#fff;border-color:var(--ac)}
-.primary{background:var(--ac);color:#fff;border-color:var(--ac)}
+.seg button.on{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
+.primary{background:var(--ac);color:var(--acfg);border-color:var(--ac)}
 .danger{color:var(--bad)}
 .card{border:1px solid var(--bd);border-radius:8px;padding:10px 12px;margin:8px 0;display:flex;gap:12px;align-items:flex-start}
 .card .main{flex:1;min-width:0}
 .name{font-weight:600;font-size:14px;word-break:break-all}
 .tag{display:inline-block;font-size:11px;padding:1px 7px;border-radius:10px;border:1px solid var(--bd);color:var(--mut);margin:0 4px 0 0}
-.tag.ok{color:var(--ok);border-color:var(--ok)}.tag.upd{color:#bf8700;border-color:#bf8700}
+.tag.ok{color:var(--ok);border-color:var(--ok)}.tag.upd{color:var(--warn);border-color:var(--warn)}
 .desc{margin:4px 0;color:var(--mut);font-size:13px;line-height:1.4;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
 .act{display:flex;flex-direction:column;gap:4px;align-items:stretch;min-width:92px}
 .meta{font-size:12px;color:var(--mut)}
 a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 #toast{position:fixed;left:14px;right:14px;bottom:12px;padding:8px 12px;border-radius:8px;background:#1f2328;color:#fff;display:none;z-index:9;font-size:13px}
-#toast.err{background:var(--bad)}#toast.ok{background:var(--ok)}
+#toast.err{background:var(--bad);color:#fff}#toast.ok{background:var(--ok);color:#fff}
 .empty{padding:30px;text-align:center;color:var(--mut)}
 .spin{display:inline-block;width:12px;height:12px;border:2px solid var(--bd);border-top-color:var(--ac);border-radius:50%;animation:s .7s linear infinite;vertical-align:-2px;margin-right:6px}
 @keyframes s{to{transform:rotate(360deg)}}
 </style>
 <header>
-<h1>🥷 Agent Skills Ninja <small id="count"></small><button id="about" title="このアプリについて" style="margin-left:auto;border:0;background:none;font-size:16px">ⓘ</button></h1>
+<h1>🥷 Agent Skills Ninja <small id="count"></small><span style="margin-left:auto;display:flex;gap:4px;align-items:center"><select id="theme" title="テーマ" style="padding:2px 4px;font-size:12px;min-width:0"><option value="auto">🖥 自動（App に合わせる）</option><option value="dark">🌙 ダーク</option><option value="light">☀ ライト</option><option value="ninja">🥷 ニンジャ（紫）</option><option value="forest">🌲 フォレスト（緑）</option><option value="sakura">🌸 サクラ（桜）</option></select><button id="about" title="このアプリについて" style="border:0;background:none;font-size:16px;padding:2px 6px">ⓘ</button></span></h1>
 <div class="tabs"><button id="t-search" class="on">探す</button><button id="t-rec">おすすめ</button><button id="t-inst">インストール済み <span id="n-inst"></span></button><button id="t-upd">更新</button><button id="t-src">ソース</button></div>
 <div class="row"><input id="q" type="search" placeholder="キーワードで検索（例: pdf, azure, docx）" autofocus>
 <span class="seg" title="インストール先"><button id="s-user" class="on">user</button><button id="s-project">project</button></span>
@@ -257,6 +262,8 @@ function setScope(sc){S.scope=sc;$("#s-user").className=sc==="user"?"on":"";$("#
 let deb;$("#q").oninput=()=>{clearTimeout(deb);deb=setTimeout(()=>S.tab==="search"?fetchSearch(false):draw(),250)};
 $("#src").onchange=$("#cat").onchange=()=>fetchSearch(false);
 $("#about").onclick=()=>show("about");
+$("#theme").value=document.documentElement.dataset.theme;
+$("#theme").onchange=async e=>{const t=e.target.value;document.documentElement.dataset.theme=t;try{await api("theme",{theme:t})}catch(x){toast(x.message,"err")}};
 $("#t-search").onclick=()=>show("search");$("#t-rec").onclick=()=>show("rec");$("#t-inst").onclick=()=>show("inst");$("#t-upd").onclick=()=>show("upd");$("#t-src").onclick=()=>show("src");
 $("#s-user").onclick=()=>setScope("user");$("#s-project").onclick=()=>setScope("project");
 function setLang(l){S.lang=l;$("#l-ja").className=l==="ja"?"on":"";$("#l-en").className=l==="en"?"on":"";draw()}
@@ -324,7 +331,12 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
       const cwd = getCwd();
       if (url.pathname === "/") {
         res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
-        return res.end(HTML);
+        return res.end(HTML.replace('data-theme="auto"', `data-theme="${await getTheme()}"`));
+      }
+      if (req.method === "POST" && url.pathname === "/api/theme") {
+        const b = await readBody(req);
+        await setTheme(String(b.theme ?? ""));
+        return json(res, 200, { ok: true });
       }
       const index = await loadIndex();
       const q = url.searchParams;

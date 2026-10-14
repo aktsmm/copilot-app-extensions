@@ -219,6 +219,34 @@ test("failing sources: classified, remembered, no nagging loop, ignore, change U
   }
 });
 
+test("theme persists and is injected server-side", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
+  const prev = process.env.SKILL_NINJA_HOME;
+  process.env.SKILL_NINJA_HOME = home;
+  const stamp = Date.now();
+  // ui.mjs imports ./core.mjs, so load both through a fresh copy of the directory to keep one isolated instance.
+  const copy = path.join(home, "core");
+  await fs.cp(new URL("../core/", import.meta.url), copy, { recursive: true });
+  await fs.cp(new URL("../resources/", import.meta.url), path.join(home, "resources"), { recursive: true });
+  const core = await import(`${new URL(`file:///${copy.replace(/\\/g, "/")}/core.mjs`)}?t=${stamp}`);
+  const { startUiServer } = await import(`${new URL(`file:///${copy.replace(/\\/g, "/")}/ui.mjs`)}?t=${stamp}`);
+  const ui = await startUiServer(() => process.cwd());
+  try {
+    assert.equal(await core.getTheme(), "auto");
+    const post = (t) => fetch(`http://127.0.0.1:${ui.port}/api/theme?t=${ui.token}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ theme: t }) });
+    assert.equal((await post("ninja")).status, 200);
+    assert.equal((await post("evil\"><script>")).status, 500);
+    assert.equal(await core.getTheme(), "ninja");
+    assert.match(await (await fetch(`http://127.0.0.1:${ui.port}/?t=${ui.token}`)).text(), /data-theme="ninja"/);
+    assert.ok(JSON.parse(await fs.readFile(path.join(home, "skill-ninja.json"), "utf8")).theme === "ninja");
+  } finally {
+    ui.server.close();
+    if (prev === undefined) delete process.env.SKILL_NINJA_HOME;
+    else process.env.SKILL_NINJA_HOME = prev;
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
 test("stale sources, localize, create skill, upstream sync, web search", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
   process.env.SKILL_NINJA_HOME = home;

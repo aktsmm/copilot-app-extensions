@@ -12,6 +12,7 @@ GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストー�
   - `SKILL.md` のプレビュー、説明文の自動補完、日本語 / EN 切替
   - おすすめ: プロジェクトのファイル構成・`package.json`・README から導入候補を提示
   - 更新: 上流の変更を検出し「すべて更新」
+  - テーマ: 右上のセレクタで切り替え（自動 / ダーク / ライト / ニンジャ（紫）/ フォレスト（緑）/ サクラ（桜））。既定の「自動」は Copilot App（OS）のライト/ダークに追従し、選択は `~/.copilot/skill-ninja.json` に保存されます
   - ソース: 追加 / 削除、再スキャン、**30 日以上未スキャンのソースを古い順に最大 5 件ずつ更新**、Web 検索（GitHub の `topic:agent-skills`）からのソース追加、**VS Code 版 Agent Skills Ninja からのインポート**、バンドルの一括インストール
   - 日本語要約: カタログの日本語説明を表示。無いものは「日本語要約を追加」で保存（エージェントの `skill_ninja_localize_skill` でも可）
   - インストール済み: ピン → 新しい順。`新規作成` で SKILL.md の雛形を作成

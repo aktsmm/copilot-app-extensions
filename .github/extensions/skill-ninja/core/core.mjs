@@ -115,6 +115,18 @@ async function writeShared(mutate) {
   return "written";
 }
 
+export async function getTheme() {
+  const t = (await loadConfig()).theme;
+  return THEMES.includes(t) ? t : "auto";
+}
+
+export const THEMES = ["auto", "dark", "light", "ninja", "forest", "sakura"];
+
+export async function setTheme(theme) {
+  if (!THEMES.includes(theme)) throw new Error("invalid theme");
+  await writeJson(CONFIG_PATH, { ...(await loadConfig()), theme });
+}
+
 export async function addSource({ id, url, branch, type = "community" }) {
   if (!isSafeName(id)) throw new Error(`Invalid source id: ${id}`);
   parseRepo(url);
