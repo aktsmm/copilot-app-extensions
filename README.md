@@ -12,20 +12,34 @@
 
 ## インストール
 
-Copilot App で、`install_extension` に**拡張フォルダの URL**を渡します（`<name>` を下の表から選びます）。
+**GitHub Release やパッケージは不要です。** このリポジトリの URL を渡すだけで入ります（Copilot App の `install_extension` が、リポジトリ内のフォルダ URL から直接取得するため）。
+
+### いちばん簡単な方法
+
+Copilot App のチャットで次のように頼みます。
+
+> 「`https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/skill-ninja` を install_extension でインストールして」
+
+- 入れる場所は `user`（全プロジェクト共通・おすすめ）、`project`（そのリポジトリのみ）、`session`（このセッションのみ）から選べます。
+- 入れたあとは自動で再読み込みされます。「Agent Skills Ninja を開いて」と頼むとキャンバスが開きます。
+
+### 他の拡張を入れるとき
 
 ```
 https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/<name>
 ```
 
-例: Agent Skills Ninja
+`<name>` は上の「拡張機能一覧」のフォルダ名です。
 
-```
-https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/skill-ninja
-```
+### 更新するには
 
-- このリポジトリをプロジェクトとして開いたセッションでは、`.github/extensions/` 配下の拡張がそのまま読み込まれます。
-- インストール先は `user`（全プロジェクト共通）と `project`（そのリポジトリのみ）から選べます。
+同じ URL でもう一度 `install_extension` を実行すると、最新の main の内容に置き換わります。
+
+### 補足
+
+- このリポジトリを開いたセッションでは、`.github/extensions/` 配下の拡張がインストールなしでそのまま読み込まれます。
+- `install_extension` には **1 ファイル 1,000,000 バイトまで**という上限があります。大きなデータを同梱する拡張は、この範囲に収めてください（Agent Skills Ninja のカタログは約 0.9MB で、`scripts/sync-catalog.mjs` が超過をチェックします）。
+- 動作確認済み: 現在の main の URL から、実際にインストールできることを検証しました。
 
 > リポジトリを公開するまでは、`install_extension` で URL 指定するには GitHub へのアクセス権（private の場合）が必要です。
 
