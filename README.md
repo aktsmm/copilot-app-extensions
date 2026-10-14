@@ -88,6 +88,14 @@ cd .github/extensions/skill-ninja
 node --test test/core.test.mjs
 ```
 
+## リンク・作者
+
+画面右上の ⓘ から「このアプリについて」を開けます。
+
+- Copilot App 版: https://github.com/aktsmm/copilot-app-agent-skill-ninja
+- VS Code 版 Agent Skills Ninja: https://github.com/aktsmm/vscode-agent-skill-ninja（[Marketplace](https://marketplace.visualstudio.com/items?itemName=yamapan.agent-skill-ninja)）
+- 作者: yamapan（[@aktsmm](https://github.com/aktsmm) / [X: @mmskats](https://x.com/mmskats)）
+
 ## ライセンス
 
 CC BY-NC-SA 4.0 — Copyright (c) aktsmm。カタログは VS Code 版 `resources/skill-index.json` 由来です。

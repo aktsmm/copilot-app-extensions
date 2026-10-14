@@ -44,7 +44,7 @@ a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 @keyframes s{to{transform:rotate(360deg)}}
 </style>
 <header>
-<h1>🥷 Agent Skills Ninja <small id="count"></small></h1>
+<h1>🥷 Agent Skills Ninja <small id="count"></small><button id="about" title="このアプリについて" style="margin-left:auto;border:0;background:none;font-size:16px">ⓘ</button></h1>
 <div class="tabs"><button id="t-search" class="on">探す</button><button id="t-rec">おすすめ</button><button id="t-inst">インストール済み <span id="n-inst"></span></button><button id="t-upd">更新</button><button id="t-src">ソース</button></div>
 <div class="row"><input id="q" type="search" placeholder="キーワードで検索（例: pdf, azure, docx）" autofocus>
 <span class="seg" title="インストール先"><button id="s-user" class="on">user</button><button id="s-project">project</button></span>
@@ -163,6 +163,19 @@ async function drawSources(){
   }catch(e){l.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'}
 }
 async function refreshFacets(){const f=await api("facets");$("#count").textContent=f.total+" skills";$("#src").innerHTML='<option value="">すべてのソース</option>'+f.sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.name)+' ('+s.count+')</option>').join("")}
+function drawAbout(){
+  const L=(u,t)=>'<a href="'+u+'" target="_blank" rel="noopener">'+t+'</a>';
+  $("#list").innerHTML='<div class="card"><div class="main"><div class="name">🥷 Agent Skills Ninja for GitHub Copilot App</div>'
+    +'<div class="desc" style="-webkit-line-clamp:unset">Agent Skills（SKILL.md）を検索・インストール・管理する Copilot App 向け拡張機能です。VS Code 版 Agent Skills Ninja のコアを移植しています。</div>'
+    +'<div class="meta">リンク</div><ul style="margin:4px 0 10px;padding-left:18px;line-height:1.8">'
+    +'<li>'+L("https://github.com/aktsmm/copilot-app-agent-skill-ninja","Copilot App 版（このリポジトリ）")+'</li>'
+    +'<li>'+L("https://github.com/aktsmm/vscode-agent-skill-ninja","VS Code 版 Agent Skills Ninja")+'</li>'
+    +'<li>'+L("https://marketplace.visualstudio.com/items?itemName=yamapan.agent-skill-ninja","VS Code Marketplace")+'</li>'
+    +'<li>'+L("https://github.com/aktsmm/copilot-app-agent-skill-ninja/issues","不具合報告・要望")+'</li></ul>'
+    +'<div class="meta">作者</div><div style="margin:4px 0 10px">yamapan（'+L("https://github.com/aktsmm","@aktsmm")+' / '+L("https://x.com/mmskats","X: @mmskats")+'）</div>'
+    +'<div class="meta">ライセンス</div><div style="margin:4px 0">'+L("https://creativecommons.org/licenses/by-nc-sa/4.0/","CC BY-NC-SA 4.0")+'（非商用・継承）。スキル本体の権利は各リポジトリの作者に帰属します。</div>'
+    +'</div></div>';
+}
 let view=[],total=0,searchSeq=0;
 const KEEP=["#cname","#cdesc","#locin"];
 function draw(){
@@ -185,6 +198,8 @@ function render(){
     const form='<div class="row"><input id="cname" placeholder="新しいスキル名（例: my-skill）" style="max-width:200px"><input id="cdesc" placeholder="説明（任意）"><button id="cmk">'+S.scope+' に新規作成</button></div>';
     l.innerHTML=form+(items.length?'<div class="meta">'+S.scope+' に '+items.length+' 件（ピン → 新しい順）</div>'+items.map(i=>card({name:i.dir,description:i.description,categories:[],source:i.source})).join(""):'<div class="empty">'+S.scope+' にインストール済みのスキルはありません</div>');
     $("#cmk").onclick=async()=>{try{const r=await api("create",{name:$("#cname").value.trim(),description:$("#cdesc").value,scope:S.scope});if(r.status==="exists")return toast("同名のスキルが既にあります","err");toast("作成しました: "+r.dest,"ok");await loadInstalled();draw()}catch(e){toast(e.message,"err")}};
+  }else if(S.tab==="about"){
+    return drawAbout();
   }else if(S.tab==="src"){
     return drawSources();
   }else{
@@ -206,6 +221,7 @@ async function show(tab){
   S.tab=tab;S.confirm=null;
   for(const k of["search","rec","inst","upd","src"])$("#t-"+k).className=tab===k?"on":"";
   $("#filters").style.display=tab==="search"?"flex":"none";
+  if(tab==="about"){S.tab="about";return drawAbout()}
   if(tab==="search")return fetchSearch(false);
   if(tab==="src")return drawSources();
   if(tab==="rec"){$("#list").innerHTML='<div class="empty"><span class="spin"></span>プロジェクトを解析中…</div>';try{S.rec=(await api("recommend")).items}catch(e){toast(e.message,"err")}return draw()}
@@ -218,6 +234,7 @@ const SCOPE_HELP={user:"<b>user</b>: あなたの全プロジェクトで使え�
 function setScope(sc){S.scope=sc;$("#s-user").className=sc==="user"?"on":"";$("#s-project").className=sc==="project"?"on":"";$("#scopehelp").innerHTML=SCOPE_HELP[sc];draw()}
 let deb;$("#q").oninput=()=>{clearTimeout(deb);deb=setTimeout(()=>S.tab==="search"?fetchSearch(false):draw(),250)};
 $("#src").onchange=$("#cat").onchange=()=>fetchSearch(false);
+$("#about").onclick=()=>show("about");
 $("#t-search").onclick=()=>show("search");$("#t-rec").onclick=()=>show("rec");$("#t-inst").onclick=()=>show("inst");$("#t-upd").onclick=()=>show("upd");$("#t-src").onclick=()=>show("src");
 $("#s-user").onclick=()=>setScope("user");$("#s-project").onclick=()=>setScope("project");
 function setLang(l){S.lang=l;$("#l-ja").className=l==="ja"?"on":"";$("#l-en").className=l==="en"?"on":"";draw()}
