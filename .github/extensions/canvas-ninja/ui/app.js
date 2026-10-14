@@ -113,7 +113,7 @@ function renderToolbarInner() {
   const srcs = Object.entries(S.facets.sources ?? {});
   const shownBundles = S.bundles.filter(bundleMatches);
   const bundles = shownBundles.length
-    ? `${S.tab === "official" ? `<div class="hint">${T("official.hint")}</div>` : ""}<h3 class="sec">${T("official.bundles")}</h3><div class="bundles">${shownBundles.map((b) => `<div class="bundle"><div class="bhead"><span class="bicon">${esc(b.icon || "📦")}</span><b>${esc(b.name[S.lang] || b.name.en)}</b><span class="tag">${esc(T("bundle.items", { n: b.items.length }))}</span></div><div class="meta">${esc(b.description[S.lang] || b.description.en)}</div><div class="row" style="margin-top:6px"><button class="primary" data-a="bundle" data-id="${esc(b.id)}">${T("bundle.review")}</button></div></div>`).join("")}</div>`
+    ? `${S.tab === "official" ? `<div class="hint">${T("official.hint")}</div>` : ""}<h3 class="sec">${T("official.bundles")}</h3><div class="bundles">${shownBundles.map((b) => `<div class="bundle"><div class="bhead"><span class="bicon">${esc(b.icon || "📦")}</span><b>${esc(b.name[S.lang] || b.name.en)}</b><span class="tag">${esc(T("bundle.items", { n: b.items.length }))}</span></div><div class="meta">${esc(b.description[S.lang] || b.description.en)}</div><div class="row" style="margin-top:6px"><button class="primary" data-a="bundle" data-id="${esc(b.id)}">${T("bundle.review")}</button>${b.custom ? `<button class="danger" data-a="bundle-del" data-id="${esc(b.id)}">${T("set.delete")}</button>` : ""}</div></div>`).join("")}</div>`
     : "";
   tb.innerHTML = `${bundles}<div class="row"><div class="search"><input id="q" type="search" placeholder="${esc(T("search.placeholder"))}" value="${esc(S.q)}" autocomplete="off"></div>
     <span class="seg" title="${esc(T("search.destLabel"))}"><button data-a="scope" data-v="user" class="${S.scope === "user" ? "on" : ""}">user</button><button data-a="scope" data-v="project" class="${S.scope === "project" ? "on" : ""}">project</button></span></div>
@@ -212,7 +212,7 @@ function renderDetail() {
   } else body = rv && rv.files ? `<div class="files">${rv.files.map((f) => `<div><span class="mono">${esc(f.rel)}</span><span class="meta">${f.size} B</span></div>`).join("")}</div>` : `<div class="meta">${T("d.filesHint")}</div>`;
   pane.innerHTML = `<button class="back ghost" data-a="close-detail">${T("btn.back")}</button>
     <div class="dhead">${avatar(e, true)}<div style="min-width:0"><h2>${esc(e.displayName || e.name)} ${e.official ? `<span class="tag off">✔ ${T("badge.official")}</span>` : ""}</h2><div class="meta mono">${esc(e.repo)}${e.path ? "/" + esc(e.path) : ""}</div></div></div>
-    <div class="dactions">${actions}<a href="${esc(repoUrl(e))}" target="_blank" rel="noopener noreferrer"><button>${T("btn.github")}</button></a></div>
+    <div class="dactions">${actions}<button data-a="addset" data-key="${esc(e.key)}">${T("btn.addToSet")}</button><a href="${esc(repoUrl(e))}" target="_blank" rel="noopener noreferrer"><button>${T("btn.github")}</button></a></div>
     <div class="dtabs">${tabs.map((k) => `<button data-a="dtab" data-v="${k}" class="${S.dtab === k ? "on" : ""}">${T(`dtab.${k}`)}</button>`).join("")}</div>${body}`;
 }
 
@@ -322,7 +322,7 @@ async function openBundle(id) {
   const st = { items: [], prereq: [], ack: false, phase: "reviewing", results: null };
   S.bundleState = st;
   const render = () => {
-    const rows = st.items.map((it) => `<div class="finding"><span class="dot ${it.rv?.risk === "high" ? "high" : it.rv?.risk === "medium" ? "medium" : "info"}"></span><div><b>${esc(it.e.displayName || it.e.name)}</b> ${it.rv ? riskTag(it.rv.risk) : it.err ? `<span class="tag bad">${esc(it.err)}</span>` : '<span class="spin"></span>'}${it.rv ? `<div class="meta">${contentsTags(it.rv.contents)} ${it.rv.findings.filter((f) => f.sev !== "info").slice(0, 4).map((f) => esc(findingText(S.lang, f))).join(" / ")}</div>` : ""}${it.result ? `<div class="meta">${it.result}</div>` : ""}</div></div>`).join("");
+    const rows = st.items.map((it) => `<div class="finding"><span class="dot ${it.rv?.risk === "high" ? "high" : it.rv?.risk === "medium" ? "medium" : "info"}"></span><div><b>${esc(it.e.displayName || it.e.name)}</b> ${it.rv ? riskTag(it.rv.risk) : it.err ? `<span class="tag bad">${esc(it.err)}</span>` : '<span class="spin"></span>'}${it.rv ? `<div class="meta">${contentsTags(it.rv.contents)} ${it.rv.findings.filter((f) => f.sev !== "info").slice(0, 4).map((f) => esc(findingText(S.lang, f))).join(" / ")}</div>` : ""}${it.result ? `<div class="meta">${it.result}</div>` : ""}</div>${b.custom && st.phase !== "installing" ? `<button class="ghost" data-rm="${esc(it.e.key)}" title="${esc(T("set.removeItem"))}">✕</button>` : ""}</div>`).join("");
     const pre = st.prereq.map((p) => `<span class="tag ${p.ok === undefined ? "" : p.ok ? "ok" : "bad"}">${p.ok === undefined ? "…" : p.ok ? "✓" : "✗"} ${esc(T(`prereq.${p.id}`))}</span>`).join("");
     const ready = st.phase === "ready";
     const needAck = st.items.some((i) => i.rv && i.rv.risk === "high");
@@ -332,6 +332,7 @@ async function openBundle(id) {
       ${ready && needAck ? `<label class="meta"><input type="checkbox" id="back" ${st.ack ? "checked" : ""}> ${T("bundle.ackAll")}</label>` : ""}
       <div class="row" style="margin-top:10px">${ready ? `<button class="primary" id="binst" ${needAck && !st.ack ? "disabled" : ""}>${T("bundle.installAll")}</button>` : st.phase === "reviewing" ? `<span class="meta"><span class="spin"></span>${T("bundle.reviewing")}</span>` : ""}<button id="bclose">${T("btn.close")}</button></div>`;
     d.querySelector("#bclose").onclick = () => d.close();
+    d.querySelectorAll("[data-rm]").forEach((x) => (x.onclick = async () => { await api("bundle/remove-item", { bundleId: b.id, key: x.dataset.rm }).catch(fail); st.items = st.items.filter((i) => i.e.key !== x.dataset.rm); await reinit(); if (!st.items.length) { d.close(); draw(); } else render(); }));
     d.querySelector("#back")?.addEventListener("change", (ev) => { st.ack = ev.target.checked; render(); });
     d.querySelector("#binst")?.addEventListener("click", doInstall);
   };
@@ -370,6 +371,22 @@ async function openBundle(id) {
   } catch (e) { st.phase = "done"; fail(e); render(); }
 }
 
+function openAddToSet(key) {
+  const e = detailOf(key); if (!e) return;
+  const d = $("#dlg");
+  const mine = S.bundles.filter((b) => b.custom);
+  d.innerHTML = `<h3 style="margin-top:0">${T("set.title")}: ${esc(e.displayName || e.name)}</h3><div class="meta">${T("set.hint")}</div>
+    ${mine.length ? `<div class="meta" style="margin-top:8px">${T("set.existing")}</div>${mine.map((b) => `<div class="srcrow"><div class="grow">${esc(b.icon || "⭐")} <b>${esc(b.name[S.lang] || b.name.en)}</b> <span class="tag">${esc(T("bundle.items", { n: b.items.length }))}</span>${b.items.includes(key) ? '<span class="tag ok">✓</span>' : ""}</div><button data-set="${esc(b.id)}" ${b.items.includes(key) ? "disabled" : ""}>${T("btn.addToSet")}</button></div>`).join("")}` : ""}
+    <div class="form"><input id="newset" type="text" maxlength="60" placeholder="${esc(T("set.newPh"))}"><button class="primary" id="mkset">${T("set.create")}</button></div>
+    <div class="row"><button id="setclose">${T("btn.close")}</button></div>`;
+  const done = async (r, created, name) => { toast(created ? T("set.created", { name }) : T("set.added", { name }), "ok"); d.close(); await reinit(); draw(); };
+  d.querySelectorAll("[data-set]").forEach((b) => (b.onclick = async () => { try { await api("bundle/add", { key, bundleId: b.dataset.set }); const bb = mine.find((x) => x.id === b.dataset.set); await done(null, false, bb.name[S.lang] || bb.name.en); } catch (err) { fail(err); } }));
+  const mk = async () => { const name = d.querySelector("#newset").value.trim(); if (!name) return; try { await api("bundle/add", { key, name }); await done(null, true, name); } catch (err) { fail(err); } };
+  d.querySelector("#mkset").onclick = mk;
+  d.querySelector("#newset").addEventListener("keydown", (ev) => { if (ev.key === "Enter") mk(); });
+  d.querySelector("#setclose").onclick = () => d.close();
+  d.showModal();
+}
 // ---------- actions ----------
 async function loadReadme(key) {
   const e = detailOf(key); if (!e) return;
@@ -404,6 +421,12 @@ async function act(a, el) {
     case "favonly": S.favonly = !S.favonly; return fetchSearch(true);
     case "more": S.offset += 24; return fetchSearch(false);
     case "bundle": return openBundle(d.id);
+    case "bundle-del": {
+      const b = S.bundles.find((x) => x.id === d.id);
+      if (!b || !confirm(T("set.confirmDelete", { name: b.name[S.lang] || b.name.en }))) return;
+      await api("bundle/delete", { id: d.id }).catch(fail); toast(T("set.deleted"), "ok"); await reinit(); return draw();
+    }
+    case "addset": return openAddToSet(d.key);
     case "dtab": S.dtab = d.v; if (d.v === "readme" && S.readme[S.sel] === undefined) loadReadme(S.sel); return draw();
     case "close-detail": S.sel = null; return draw();
     case "review": return review(d.key);

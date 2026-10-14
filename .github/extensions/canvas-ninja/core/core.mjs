@@ -79,10 +79,10 @@ const updateJson = (file, fallback, fn) =>
   });
 export async function loadConfig() {
   const c = await readJson(CONFIG_PATH, {});
-  return { sources: [], favorites: [], pins: [], overrides: {}, ignored: [], failures: {}, ja: {}, ...c };
+  return { sources: [], favorites: [], pins: [], overrides: {}, ignored: [], failures: {}, ja: {}, customBundles: [], ...c };
 }
 const mutateConfig = (fn) => updateJson(CONFIG_PATH, {}, async (raw) => {
-  const c = { sources: [], favorites: [], pins: [], overrides: {}, ignored: [], failures: {}, ja: {}, ...raw };
+  const c = { sources: [], favorites: [], pins: [], overrides: {}, ignored: [], failures: {}, ja: {}, customBundles: [], ...raw };
   const r = await fn(c);
   for (const k of Object.keys(raw)) delete raw[k];
   Object.assign(raw, c);
@@ -95,8 +95,40 @@ export const setTheme = (theme) => mutateConfig((c) => void (c.theme = theme));
 export const getLang = async () => (await loadConfig()).lang || "";
 export const setLang = (lang) => mutateConfig((c) => void (c.lang = lang === "en" ? "en" : "ja"));
 export async function loadBundles() {
-  return readJson(path.join(HERE, "..", "resources", "bundles.json"), { bundles: [] });
+  const [base, cfg] = await Promise.all([readJson(path.join(HERE, "..", "resources", "bundles.json"), { bundles: [] }), loadConfig()]);
+  return { bundles: [...(base.bundles ?? []), ...cfg.customBundles.map((b) => ({ ...b, custom: true }))] };
 }
+
+export async function addToBundle({ key, bundleId, name }) {
+  if (typeof key !== "string" || !key) throw new Error("key required");
+  return mutateConfig((c) => {
+    let b = bundleId ? c.customBundles.find((x) => x.id === bundleId) : null;
+    if (!b) {
+      const nm = String(name ?? "").trim().slice(0, 60);
+      if (!nm) throw new Error("name required");
+      if (c.customBundles.length >= 20) throw new Error("too many sets");
+      b = { id: `my-${crypto.randomBytes(4).toString("hex")}`, icon: "⭐", name: { ja: nm, en: nm }, description: { ja: "自分で作ったセット", en: "My own set" }, items: [], prereq: [] };
+      c.customBundles.push(b);
+    }
+    if (b.items.length >= 40) throw new Error("too many items");
+    if (!b.items.includes(key)) b.items.push(key);
+    return { id: b.id, count: b.items.length };
+  });
+}
+export const removeFromBundle = ({ bundleId, key }) =>
+  mutateConfig((c) => {
+    const b = c.customBundles.find((x) => x.id === bundleId);
+    if (!b) return false;
+    b.items = b.items.filter((k) => k !== key);
+    if (!b.items.length) c.customBundles = c.customBundles.filter((x) => x !== b);
+    return true;
+  });
+export const deleteBundle = (id) =>
+  mutateConfig((c) => {
+    const n = c.customBundles.length;
+    c.customBundles = c.customBundles.filter((x) => x.id !== id);
+    return c.customBundles.length < n;
+  });
 export async function toggleListed(field, key) {
   return mutateConfig((c) => {
     const set = new Set(c[field]);

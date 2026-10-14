@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import {
   loadIndex, searchExtensions, getFacets, findExtension, reviewExtension, reviewPlugin, installPlugin, publicReview, installExtension, uninstallExtension,
-  listInstalled, checkUpdates, fetchReadme, loadConfig, toggleListed, getTheme, setTheme, getLang, setLang, loadBundles, setLocalized, addSource, removeSource,
+  listInstalled, checkUpdates, fetchReadme, loadConfig, toggleListed, getTheme, setTheme, getLang, setLang,   loadBundles, addToBundle, removeFromBundle, deleteBundle, setLocalized, addSource, removeSource,
   refreshIndex, staleSources, sourceProblems, setIgnored, setSourceUrl, webSearch, STALE_DAYS, MAX_STALE_PER_RUN, parseGithubUrl,
 } from "./core.mjs";
 
@@ -137,6 +137,12 @@ export async function startUiServer({ cwd, reload, sessionExtensions, plugins })
       case "lang":
         await setLang(String(body.lang));
         return { ok: true };
+      case "bundle/add":
+        return await addToBundle({ key: body.key, bundleId: body.bundleId, name: body.name });
+      case "bundle/remove-item":
+        return { ok: await removeFromBundle({ bundleId: body.bundleId, key: body.key }) };
+      case "bundle/delete":
+        return { ok: await deleteBundle(body.id) };
       case "uninstall":
         return await uninstallExtension({ name: body.name, scope: body.scope === "project" ? "project" : "user", cwd: cwd(), force: !!body.force });
       case "reload":

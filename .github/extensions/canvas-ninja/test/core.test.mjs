@@ -368,6 +368,24 @@ test("reviewPlugin + installPlugin: reviewId required, marketplace pin must stil
   assert.equal(calls.length, 1);
 });
 
+test("custom sets: create, add, remove item, auto-delete when empty, delete", async () => {
+  const a = await core.addToBundle({ key: "github/awesome-copilot:extensions/draw", name: "My Azure" });
+  assert.match(a.id, /^my-[0-9a-f]{8}$/);
+  await core.addToBundle({ key: "github/awesome-copilot:extensions/draw", bundleId: a.id });
+  const b2 = await core.addToBundle({ key: "github/awesome-copilot:extensions/color-orb", bundleId: a.id });
+  assert.equal(b2.count, 2);
+  const mine = (await core.loadBundles()).bundles.find((b) => b.id === a.id);
+  assert.ok(mine.custom && mine.name.ja === "My Azure" && mine.items.length === 2);
+  await assert.rejects(core.addToBundle({ key: "x" }), /name required/);
+  await core.removeFromBundle({ bundleId: a.id, key: "github/awesome-copilot:extensions/draw" });
+  assert.equal((await core.loadBundles()).bundles.find((b) => b.id === a.id).items.length, 1);
+  await core.removeFromBundle({ bundleId: a.id, key: "github/awesome-copilot:extensions/color-orb" });
+  assert.ok(!(await core.loadBundles()).bundles.some((b) => b.id === a.id));
+  const c = await core.addToBundle({ key: "k", name: "tmp" });
+  assert.ok(await core.deleteBundle(c.id));
+  assert.ok(!(await core.deleteBundle(c.id)));
+});
+
 test("bundled catalog and bundles are valid", async () => {
   const j = JSON.parse(await fs.readFile(new URL("../resources/catalog.json", import.meta.url), "utf8"));
   assert.ok(j.extensions.length > 30);
