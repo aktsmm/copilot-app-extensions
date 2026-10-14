@@ -8,7 +8,7 @@
 
 | 拡張 | 概要 | フォルダ |
 | --- | --- | --- |
-| 🥷 **Agent Skills Ninja** | Agent Skills（SKILL.md）の検索・インストール・更新・管理。キャンバス UI、VS Code 版との連携つき | [`.github/extensions/skill-ninja`](.github/extensions/skill-ninja/README.md) |
+| 🥷 **Agent Skills Ninja** | Agent Skills（SKILL.md）の検索・インストール・更新・管理。約 2,060 スキルを同梱し、説明は日本語対応（約 1,870 件）。種別（公式/コミュニティ）での絞り込み、キャンバス UI、VS Code 版との連携つき | [`.github/extensions/skill-ninja`](.github/extensions/skill-ninja/README.md) |
 
 ## インストール
 
@@ -38,10 +38,10 @@ https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/<n
 ### 補足
 
 - このリポジトリを開いたセッションでは、`.github/extensions/` 配下の拡張がインストールなしでそのまま読み込まれます。
-- `install_extension` には **1 ファイル 1,000,000 バイトまで**という上限があります。大きなデータを同梱する拡張は、この範囲に収めてください（Agent Skills Ninja のカタログは約 0.9MB で、`scripts/sync-catalog.mjs` が超過をチェックします）。
+- `install_extension` には **1 ファイル 1,000,000 バイトまで**という上限があります。大きなデータを同梱する拡張は、この範囲に収めてください（Agent Skills Ninja のカタログは約 0.76MB、日本語訳は約 0.3MB で、いずれも別ファイル。`scripts/sync-catalog.mjs` と `test/limits.test.mjs` が超過をチェックします）。
 - 動作確認済み: 現在の main の URL から、実際にインストールできることを検証しました。
 
-> リポジトリを公開するまでは、`install_extension` で URL 指定するには GitHub へのアクセス権（private の場合）が必要です。
+> `install_extension` で URL を指定するには、リポジトリが公開されているか、GitHub へのアクセス権（private の場合）が必要です。
 
 ## リポジトリ構成
 
