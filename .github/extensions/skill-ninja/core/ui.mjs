@@ -190,10 +190,10 @@ function drawAbout(){
   $("#list").innerHTML='<div class="card"><div class="main"><div class="name">🥷 Agent Skills Ninja for GitHub Copilot App</div>'
     +'<div class="desc" style="-webkit-line-clamp:unset">Agent Skills（SKILL.md）を検索・インストール・管理する Copilot App 向け拡張機能です。VS Code 版 Agent Skills Ninja のコアを移植しています。</div>'
     +'<div class="meta">リンク</div><ul style="margin:4px 0 10px;padding-left:18px;line-height:1.8">'
-    +'<li>'+L("https://github.com/aktsmm/copilot-app-agent-skill-ninja","Copilot App 版（このリポジトリ）")+'</li>'
+    +'<li>'+L("https://github.com/aktsmm/copilot-app-extensions","Copilot App 拡張集（このリポジトリ）")+'</li>'
     +'<li>'+L("https://github.com/aktsmm/vscode-agent-skill-ninja","VS Code 版 Agent Skills Ninja")+'</li>'
     +'<li>'+L("https://marketplace.visualstudio.com/items?itemName=yamapan.agent-skill-ninja","VS Code Marketplace")+'</li>'
-    +'<li>'+L("https://github.com/aktsmm/copilot-app-agent-skill-ninja/issues","不具合報告・要望")+'</li></ul>'
+    +'<li>'+L("https://github.com/aktsmm/copilot-app-extensions/issues","不具合報告・要望")+'</li></ul>'
     +'<div class="meta">作者</div><div style="margin:4px 0 10px">yamapan（'+L("https://github.com/aktsmm","@aktsmm")+' / '+L("https://x.com/mmskats","X: @mmskats")+'）</div>'
     +'<div class="meta">ライセンス</div><div style="margin:4px 0">'+L("https://creativecommons.org/licenses/by-nc-sa/4.0/","CC BY-NC-SA 4.0")+'（非商用・継承）。スキル本体の権利は各リポジトリの作者に帰属します。</div>'
     +'</div></div>';

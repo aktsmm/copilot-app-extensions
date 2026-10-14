@@ -6,9 +6,9 @@ import { execFileSync } from "node:child_process";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { vscodeIndexCandidates } from "../.github/extensions/skill-ninja/core/core.mjs";
+import { vscodeIndexCandidates } from "../core/core.mjs";
 
-const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".github", "extensions", "skill-ninja", "resources", "skill-index.json");
+const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "resources", "skill-index.json");
 const UPSTREAM = "repos/aktsmm/vscode-agent-skill-ninja/contents/resources/skill-index.json";
 const PRIVATE_TYPES = new Set(["user-added"]);
 
