@@ -5,7 +5,7 @@ import {
   loadIndex, searchSkills, getFacets, findSkill, installSkill, uninstallSkill, listInstalled, checkUpdates,
   fetchSkillMd, describeSkill, getFavorites, toggleFavorite, getPins, togglePin, importFromVsCode, recommendSkills, projectContext,
   loadConfig, addSource, removeSource, refreshIndex, staleSources, STALE_DAYS, MAX_STALE_PER_RUN,
-  installBundle, setLocalized, webSearchSkills, createSkill, syncUpstream,
+  installBundle, setLocalized, webSearchSkills, createSkill, syncUpstream, sourceProblems, setIgnored, setSourceUrl, readCache as readJsonSafe,
 } from "./core.mjs";
 
 const PAGE = 24;
@@ -52,6 +52,7 @@ a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 <div class="row" id="filters"><select id="src"><option value="">すべてのソース</option></select><select id="cat"><option value="">すべてのカテゴリ</option></select><label><input id="favonly" type="checkbox" style="flex:none;min-width:0"> ★のみ</label></div>
 <div class="meta" id="scopehelp" style="margin-top:6px"></div>
 <div id="stalebar" class="row" style="display:none;background:#bf870022;border-radius:6px;padding:4px 8px"><span id="staletxt"></span><button id="stalego" class="primary">今すぐ更新</button><button id="stalex">後で</button></div>
+<div id="probbar" class="row" style="display:none;background:#d1242f22;border-radius:6px;padding:4px 8px"><span id="probtxt"></span><button id="probgo" class="primary">対応する</button></div>
 </header>
 <div id="list"></div><div id="toast"></div>
 <script>
@@ -136,27 +137,48 @@ async function updateAll(){
     S.busy.delete(k)}
   await loadInstalled();draw();toast(ok+" 件を更新"+(ng?"、"+ng+" 件失敗":""),ng?"err":"ok");
 }
+const KIND_HINT={sso:"組織の SSO 認可が必要です。認可リンクを開いて許可してから再試行してください。",notfound:"リポジトリが削除・改名された、または非公開でアクセス権がありません。URL を変更するか、不要なら無視・削除してください。",rate:"GitHub のレート制限です。しばらく待って再試行してください。",auth:"GitHub の認証に失敗しました。gh auth login を確認してください。",forbidden:"アクセスが拒否されました。権限か SSO 認可を確認してください。"};
+const repoOf=u=>(/github\.com\/([^/]+\/[^/#?]+)/.exec(u||"")||[])[1]||u;
+const safeGh=u=>/^https:\/\/github\.com\//.test(u||"")?u:"";
+function srcCard(s,stale){
+  const k=stale.get(s.id),f=s.fail;
+  const tag=s.ignored?'<span class="tag">無視中</span>':f?'<span class="tag" style="color:var(--bad);border-color:var(--bad)">取得失敗</span>':k?'<span class="tag upd">'+(k.unknown?'未スキャン':k.days+' 日前にスキャン')+'</span>':'<span class="tag ok">最新</span>';
+  const why=f&&!s.ignored?'<div class="meta" style="color:var(--bad);margin-top:4px">'+esc(KIND_HINT[f.kind]||f.message)+'</div>':'';
+  const sso=f&&f.ssoUrl&&safeGh(f.ssoUrl)?'<a href="'+esc(f.ssoUrl)+'" target="_blank" rel="noopener">SSO 認可を開く</a> ':'';
+  const form=S.editSrc===s.id?'<div class="row"><input id="newurl" placeholder="https://github.com/owner/repo" value="'+esc(s.url)+'"><input id="newbr" placeholder="ブランチ（省略可）" style="max-width:130px" value="'+esc(s.branch||"")+'"><button data-a2="url-save" data-id="'+esc(s.id)+'" class="primary">保存して再試行</button><button data-a2="url-x">×</button></div>':'';
+  return '<div class="card"><div class="main"><div class="name">'+esc(s.name||s.id)+'</div><div class="meta"><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(repoOf(s.url))+'</a>'+(s.overridden?' <span class="tag">URL 変更済み</span>':'')+'</div><div>'+tag+'</div>'+why+'<div class="meta" style="margin-top:4px">'+sso+'</div>'+form+'</div>'
+    +'<div class="act"><button data-scan="'+esc(s.id)+'">'+(f?'再試行':'再スキャン')+'</button><button data-a2="url" data-id="'+esc(s.id)+'">URL を変更</button><button data-a2="ign" data-id="'+esc(s.id)+'" data-on="'+(s.ignored?0:1)+'">'+(s.ignored?'無視を解除':'無視する')+'</button>'+(s.removable?'<button class="danger" data-rm="'+esc(s.id)+'">削除</button>':'')+'</div></div>';
+}
 async function drawSources(){
   const l=$("#list");l.innerHTML='<div class="empty"><span class="spin"></span>読み込み中…</div>';
   try{
     const [r,st,bd]=await Promise.all([api("sources"),api("stale"),api("bundles")]);
     const stale=new Map(st.items.map(x=>[x.id,x]));
     S.stale=st.items;
-    const banner=st.items.length?'<div class="card" style="border-color:#bf8700"><div class="main"><b>'+st.items.length+' 個のソースが '+st.days+' 日以上再スキャンされていません</b><div class="meta">一度に最大 '+st.max+' 件まで、古い順に再スキャンします（GitHub のレート制限対策）。</div></div><div class="act"><button id="sstale" class="primary">古いソースを更新</button></div></div>':'<div class="meta">すべてのソースが '+st.days+' 日以内にスキャン済みです</div>';
-    l.innerHTML=banner
-      +'<h3 style="font-size:14px;margin:14px 0 4px">ソースを追加</h3><div class="row"><input id="sid" placeholder="ID（例: my-skills）" style="max-width:150px"><input id="surl" placeholder="https://github.com/owner/repo"><button id="sadd" class="primary">追加</button></div>'
+    const bad=r.items.filter(s=>s.fail&&!s.ignored),muted=r.items.filter(s=>s.ignored),rest=r.items.filter(s=>!(s.fail&&!s.ignored)&&!s.ignored);
+    const banner=st.items.length?'<div class="card" style="border-color:#bf8700"><div class="main"><b>'+st.items.length+' 個のソースが '+st.days+' 日以上再スキャンされていません</b><div class="meta">一度に最大 '+st.max+' 件まで、古い順に再スキャンします（GitHub のレート制限対策）。</div></div><div class="act"><button id="sstale" class="primary">古いソースを更新</button></div></div>':'<div class="meta">未更新のソースはありません（'+st.days+' 日以内にスキャン済み、または要対応・無視中）</div>';
+    l.innerHTML=(bad.length?'<h3 style="font-size:14px;margin:6px 0 4px;color:var(--bad)">要対応（'+bad.length+'）</h3><div class="meta">失敗したソースは自動では再試行しません。下のボタンで対応してください。</div>'+bad.map(s=>srcCard(s,stale)).join(""):"")
+      +banner
+      +'<h3 style="font-size:14px;margin:14px 0 4px">ソースを追加</h3><div class="row"><input id="sid" placeholder="ID（例: my-skills）" style="max-width:150px"><input id="surl" placeholder="https://github.com/owner/repo"><button id="sadd" class="primary">追加</button></div><div class="meta">非公開リポジトリも、gh auth login 済みでアクセス権があれば使えます（org の SSO 認可が必要な場合あり）。</div>'
       +'<div class="row"><input id="wq" placeholder="GitHub でスキル集を探す（例: azure）"><button id="wgo">Web 検索</button></div><div id="wres"></div>'
       +'<div class="row"><button id="simport">VS Code 版からインポート</button><button id="srefresh">全ソースを再スキャン</button></div><div class="meta">インポートは VS Code 版 Agent Skills Ninja のソース・スキャン済みスキルを取り込みます。</div>'
       +(bd.items.length?'<h3 style="font-size:14px;margin:14px 0 4px">バンドル（まとめてインストール）</h3>'+bd.items.map(b=>'<div class="card"><div class="main"><div class="name">'+esc(b.name)+'</div><div class="desc">'+esc((S.lang==="ja"&&b.description_ja)||b.description||"")+'</div><div class="meta">'+esc((b.skills||[]).join(", "))+'</div></div><div class="act"><button class="primary" data-bundle="'+esc(b.id)+'">'+S.scope+' に導入</button></div></div>').join(""):"")
-      +'<h3 style="font-size:14px;margin:14px 0 4px">登録済みソース（'+r.items.length+'）</h3>'
-      +r.items.map(s=>{const k=stale.get(s.id);return '<div class="card"><div class="main"><div class="name">'+esc(s.name)+'</div><div class="meta"><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(s.url)+'</a></div><div>'+(k?'<span class="tag upd">'+(k.unknown?'未スキャン':k.days+' 日前にスキャン')+'</span>':'<span class="tag ok">最新</span>')+'</div></div><div class="act"><button data-scan="'+esc(s.id)+'">再スキャン</button>'+(s.removable?'<button class="danger" data-rm="'+esc(s.id)+'">削除</button>':'<span class="meta" style="text-align:center">標準</span>')+'</div></div>'}).join("");
-    const scan=async(body,btn,label)=>{if(btn){btn.disabled=true;btn.textContent="スキャン中…"}try{const x=await api("refresh",body);toast("新規 "+x.added+" 件（"+x.scanned+" ソース）"+(x.errors.length?"、エラー "+x.errors.length+" 件":""),x.errors.length?"err":"ok");S.dirtyFacets=true;await refreshFacets();drawSources()}catch(e){toast(e.message,"err");if(btn){btn.disabled=false;btn.textContent=label}}};
+      +'<h3 style="font-size:14px;margin:14px 0 4px">登録済みソース（'+rest.length+'）</h3>'+rest.map(s=>srcCard(s,stale)).join("")
+      +(muted.length?'<h3 style="font-size:14px;margin:14px 0 4px">無視中（'+muted.length+'）</h3>'+muted.map(s=>srcCard(s,stale)).join(""):"");
+    const scan=async(body,btn,label)=>{if(btn){btn.disabled=true;btn.textContent="スキャン中…"}try{const x=await api("refresh",body);const names=x.failed.slice(0,2).map(f=>f.repo+"（"+f.message+"）").join("、");toast("新規 "+x.added+" 件（"+x.scanned+" ソース）"+(x.failed.length?" / 失敗 "+x.failed.length+" 件: "+names+(x.failed.length>2?" ほか":""):""),x.failed.length?"err":"ok");await refreshFacets();refreshBars();drawSources()}catch(e){toast(e.message,"err");if(btn){btn.disabled=false;btn.textContent=label}}};
     $("#sadd").onclick=async()=>{try{await api("source",{id:$("#sid").value.trim(),url:$("#surl").value.trim()});toast("ソースを追加しました","ok");drawSources()}catch(e){toast(e.message,"err")}};
     $("#simport").onclick=async()=>{const b=$("#simport");b.disabled=true;try{const x=await api("import",{});toast(x.files.length?"ソース "+x.sources.length+" 件・スキル "+x.skills+" 件を取り込みました":"VS Code 版のデータが見つかりませんでした",x.files.length?"ok":"err");if(x.files.length){await refreshFacets();drawSources()}}catch(e){toast(e.message,"err")}b.disabled=false};
     $("#srefresh").onclick=()=>scan({},$("#srefresh"),"全ソースを再スキャン");
     const ss=$("#sstale");if(ss)ss.onclick=()=>scan({stale:true},ss,"古いソースを更新");
     l.querySelectorAll("[data-scan]").forEach(b=>b.onclick=()=>scan({ids:[b.dataset.scan]},b,"再スキャン"));
-    l.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async()=>{try{await api("source-remove",{id:b.dataset.rm});drawSources()}catch(e){toast(e.message,"err")}});
+    l.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async()=>{try{await api("source-remove",{id:b.dataset.rm});refreshBars();drawSources()}catch(e){toast(e.message,"err")}});
+    l.querySelectorAll("[data-a2]").forEach(b=>b.onclick=async()=>{const a=b.dataset.a2,id=b.dataset.id;
+      try{
+        if(a==="url"){S.editSrc=id;return drawSources()}
+        if(a==="url-x"){S.editSrc=null;return drawSources()}
+        if(a==="url-save"){await api("source-url",{id,url:$("#newurl").value,branch:$("#newbr").value});S.editSrc=null;return scan({ids:[id]},null)}
+        if(a==="ign"){await api("source-ignore",{id,on:b.dataset.on==="1"});toast(b.dataset.on==="1"?"無視しました（通知・自動更新の対象外）":"無視を解除しました","ok");refreshBars();drawSources()}
+      }catch(e){toast(e.message,"err")}});
     l.querySelectorAll("[data-bundle]").forEach(b=>b.onclick=async()=>{b.disabled=true;try{const x=await api("bundle-install",{id:b.dataset.bundle,scope:S.scope});const n=x.items.filter(i=>i.status==="installed").length;toast(n+" 件をインストール（"+x.items.length+" 件中）",n?"ok":"err");await loadInstalled()}catch(e){toast(e.message,"err")}b.disabled=false});
     $("#wgo").onclick=async()=>{const w=$("#wres");w.innerHTML='<div class="empty"><span class="spin"></span>検索中…</div>';try{const x=await api("websearch?q="+encodeURIComponent($("#wq").value));w.innerHTML=x.items.length?x.items.map((i,n)=>'<div class="card"><div class="main"><div class="name">'+esc(i.id)+' <span class="meta">★'+i.stars+'</span></div><div class="desc">'+esc(i.description)+'</div><div class="meta"><a href="'+esc(i.url)+'" target="_blank" rel="noopener">'+esc(i.url)+'</a></div></div><div class="act"><button data-wadd="'+n+'">ソースに追加</button></div></div>').join(""):'<div class="empty">見つかりませんでした</div>';
       w.querySelectorAll("[data-wadd]").forEach(b=>b.onclick=async()=>{const i=x.items[b.dataset.wadd];try{await api("source",{id:i.id,url:i.url});toast(i.id+" を追加しました。再スキャンでスキルを取り込めます","ok");drawSources()}catch(e){toast(e.message,"err")}})}catch(e){w.innerHTML='';toast(e.message,"err")}};
@@ -252,11 +274,23 @@ document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement!=
     await loadInstalled();
   }catch(e){toast(e.message,"err")}
   setScope("user");
-  api("stale").then(st=>{if(!st.items.length)return;$("#staletxt").textContent=st.items.length+" 個のソースが "+st.days+" 日以上未更新です";$("#stalebar").style.display="flex";
-    $("#stalex").onclick=()=>$("#stalebar").style.display="none";
-    $("#stalego").onclick=async()=>{const b=$("#stalego");b.disabled=true;b.textContent="更新中…";try{const x=await api("refresh",{stale:true});toast("新規 "+x.added+" 件（"+x.scanned+" ソース、最大 "+st.max+" 件ずつ）"+(x.errors.length?"、エラー "+x.errors.length+" 件":""),x.errors.length?"err":"ok");await refreshFacets();const n=await api("stale");if(n.items.length){$("#staletxt").textContent=n.items.length+" 個のソースが "+n.days+" 日以上未更新です";b.disabled=false;b.textContent="続けて更新"}else $("#stalebar").style.display="none"}catch(e){toast(e.message,"err");b.disabled=false;b.textContent="今すぐ更新"}}}).catch(()=>{});
+  $("#stalex").onclick=()=>$("#stalebar").style.display="none";
+  $("#probgo").onclick=()=>show("src");
+  $("#stalego").onclick=async()=>{const b=$("#stalego");b.disabled=true;b.textContent="更新中…";
+    try{const x=await api("refresh",{stale:true});const names=x.failed.slice(0,2).map(f=>f.repo+"（"+f.message+"）").join("、");
+      toast("新規 "+x.added+" 件（"+x.scanned+" ソース）"+(x.failed.length?" / 失敗 "+x.failed.length+" 件: "+names+(x.failed.length>2?" ほか":""):""),x.failed.length?"err":"ok");
+      await refreshFacets()}catch(e){toast(e.message,"err")}
+    b.disabled=false;b.textContent="続けて更新";refreshBars()};
+  refreshBars();
   fetchSearch(false);
 })();
+function refreshBars(){
+  api("stale").then(st=>{
+    const sb=$("#stalebar");$("#staletxt").textContent=st.items.length+" 個のソースが "+st.days+" 日以上未更新です";sb.style.display=st.items.length?"flex":"none";
+    const pb=$("#probbar"),names=st.problems.slice(0,3).map(p=>p.repo).join("、");
+    $("#probtxt").textContent=st.problems.length?"取得に失敗したソース "+st.problems.length+" 件: "+names+(st.problems.length>3?" ほか":""):"";pb.style.display=st.problems.length?"flex":"none";
+  }).catch(()=>{});
+}
 </script></html>`;
 
 export async function startUiServer(getCwd, onChange = async () => {}) {
@@ -324,7 +358,14 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
       if (url.pathname === "/api/sources") {
         const cfg = await loadConfig();
         const mine = new Set((cfg.sources ?? []).map((s) => s.id));
-        return json(res, 200, { items: index.sources.map((s) => ({ id: s.id, name: s.name, url: s.url, removable: mine.has(s.id) || s.origin === "shared" })) });
+        const ignored = new Set(cfg.ignored ?? []);
+        const fails = (await readJsonSafe()).fails ?? {};
+        return json(res, 200, {
+          items: index.sources.map((s) => ({
+            id: s.id, name: s.name, url: s.url, branch: s.branch, overridden: !!s.overridden, ignored: ignored.has(s.id),
+            fail: fails[s.id] ?? null, removable: mine.has(s.id) || s.origin === "shared",
+          })),
+        });
       }
       if (req.method === "POST" && url.pathname === "/api/source") {
         const b = await readBody(req);
@@ -340,7 +381,17 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
         await syncUpstream().catch(() => {});
         return json(res, 200, await refreshIndex(b.ids, b.stale ? { limit: MAX_STALE_PER_RUN } : {}));
       }
-      if (url.pathname === "/api/stale") return json(res, 200, { items: await staleSources(index), days: STALE_DAYS, max: MAX_STALE_PER_RUN });
+      if (url.pathname === "/api/stale") return json(res, 200, { items: await staleSources(index), problems: await sourceProblems(index), days: STALE_DAYS, max: MAX_STALE_PER_RUN });
+      if (req.method === "POST" && url.pathname === "/api/source-ignore") {
+        const b = await readBody(req);
+        await setIgnored(String(b.id ?? ""), !!b.on);
+        return json(res, 200, { ok: true });
+      }
+      if (req.method === "POST" && url.pathname === "/api/source-url") {
+        const b = await readBody(req);
+        await setSourceUrl(String(b.id ?? ""), String(b.url ?? "").trim(), b.branch ? String(b.branch).trim() : undefined);
+        return json(res, 200, { ok: true });
+      }
       if (url.pathname === "/api/bundles") return json(res, 200, { items: index.bundles });
       if (req.method === "POST" && url.pathname === "/api/bundle-install") {
         const b = await readBody(req);

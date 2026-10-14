@@ -7,6 +7,7 @@ import {
     loadIndex, searchSkills, findSkill, installSkill, uninstallSkill, listInstalled,
     recommendSkills, skillsRoot, addSource, removeSource, refreshIndex, checkUpdates, importFromVsCode,
     syncUpstream, staleSources, STALE_DAYS, MAX_STALE_PER_RUN, setLocalized, installBundle, createSkill, webSearchSkills,
+    sourceProblems, setIgnored, setSourceUrl,
 } from "./core/core.mjs";
 import { startUiServer } from "./core/ui.mjs";
 
@@ -207,6 +208,34 @@ const session = await joinSession({
                 const i = await loadIndex();
                 const left = await staleSources(i);
                 return `${up}Scan done: ${r.added} new skill(s) from ${r.scanned} source(s). Catalog: ${i.skills.length} skills, ${i.sources.length} sources. ${left.length} source(s) older than ${STALE_DAYS} days.${r.errors.length ? `\nErrors:\n${r.errors.join("\n")}` : ""}`;
+            },
+        },
+        {
+            name: "skill_ninja_source_problems",
+            description: "List catalog sources whose last scan failed, with the repository name, reason (SSO needed, not found/private, rate limit...) and suggested fix.",
+            skipPermission: true,
+            parameters: { type: "object", properties: {} },
+            handler: async () => {
+                const p = await sourceProblems(await loadIndex());
+                return p.length ? p.map((x) => `- ${x.repo} (id: ${x.id}) [${x.kind}] ${x.message}${x.ssoUrl ? `\n  SSO authorize: ${x.ssoUrl}` : ""}`).join("\n") + "\nFix with skill_ninja_manage_source (ignore / unignore / set_url), then retry via skill_ninja_update_skill_index." : "No failing sources.";
+            },
+        },
+        {
+            name: "skill_ninja_manage_source",
+            description: "Mute a failing/unwanted source (ignore), un-mute it (unignore), or point it at a different repository (set_url, optional branch).",
+            parameters: {
+                type: "object",
+                properties: { id: { type: "string" }, action: { type: "string", enum: ["ignore", "unignore", "set_url"] }, url: { type: "string" }, branch: { type: "string" } },
+                required: ["id", "action"],
+            },
+            handler: async ({ id, action, url, branch }) => {
+                try {
+                    if (action === "set_url") await setSourceUrl(id, url, branch);
+                    else await setIgnored(id, action === "ignore");
+                    return `${action} applied to '${id}'.`;
+                } catch (e) {
+                    return fail(String(e.message ?? e));
+                }
             },
         },
         {

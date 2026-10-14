@@ -162,6 +162,63 @@ test("favorites, pins, frontmatter, import from VS Code data", async () => {
   }
 });
 
+test("failing sources: classified, remembered, no nagging loop, ignore, change URL", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
+  process.env.SKILL_NINJA_HOME = home;
+  process.env.GITHUB_TOKEN = "test-token";
+  const realFetch = globalThis.fetch;
+  const core = await import(`../core/core.mjs?fail=${Date.now()}`);
+  const res = (status, headers = {}, body = {}) => ({ ok: status < 400, status, headers: { get: (k) => headers[k.toLowerCase()] ?? null }, json: async () => body });
+  try {
+    await core.addSource({ id: "src-sso", url: "https://github.com/org/sso" });
+    await core.addSource({ id: "src-gone", url: "https://github.com/me/gone" });
+    await core.addSource({ id: "src-ok", url: "https://github.com/me/ok" });
+    globalThis.fetch = async (url) => {
+      if (/org\/sso/.test(url)) return res(403, { "x-github-sso": "required; url=https://github.com/orgs/org/sso?authorization_request=abc" });
+      if (/me\/gone/.test(url)) return res(404);
+      if (/me\/ok\/git\/trees/.test(url)) return res(200, {}, { tree: [{ type: "blob", path: "skills/new-one/SKILL.md" }] });
+      if (/me\/ok$/.test(url)) return res(200, {}, { default_branch: "master" });
+      return res(200, {}, { tree: [] });
+    };
+    const r = await core.refreshIndex(["src-sso", "src-gone", "src-ok"]);
+    assert.equal(r.scanned, 1);
+    assert.equal(r.added, 1);
+    const kinds = Object.fromEntries(r.failed.map((f) => [f.id, f.kind]));
+    assert.deepEqual(kinds, { "src-sso": "sso", "src-gone": "notfound" });
+    assert.match(r.errors.join("\n"), /org\/sso/);
+    assert.ok(r.failed.find((f) => f.id === "src-sso").ssoUrl.startsWith("https://github.com/"));
+
+    const problems = await core.sourceProblems();
+    assert.deepEqual(problems.map((p) => p.id).sort(), ["src-gone", "src-sso"]);
+    const stale = (await core.staleSources(null, Date.parse("2031-01-01"))).map((s) => s.id);
+    assert.ok(!stale.includes("src-sso") && !stale.includes("src-gone"), "failing sources must not keep reappearing as stale");
+
+    await core.setIgnored("src-gone", true);
+    assert.deepEqual((await core.sourceProblems()).map((p) => p.id), ["src-sso"]);
+    const all = await core.refreshIndex();
+    assert.ok(!all.failed.some((f) => ["src-gone", "src-sso"].includes(f.id)), "auto scans skip failed/ignored sources");
+    await core.setIgnored("src-gone", false);
+
+    await core.setSourceUrl("src-sso", "https://github.com/me/ok");
+    assert.ok(!(await core.sourceProblems()).some((p) => p.id === "src-sso"), "changing the URL clears the failure");
+    assert.equal((await core.loadIndex()).sources.find((s) => s.id === "src-sso").url, "https://github.com/me/ok");
+    await assert.rejects(core.setSourceUrl("src-sso", "https://example.com/x"));
+
+    globalThis.fetch = async () => res(429, { "x-ratelimit-remaining": "0" });
+    const rl = await core.refreshIndex(["src-sso", "src-ok"]);
+    assert.equal(rl.failed.length, 1, "rate limit stops the run");
+    assert.ok(!(await core.sourceProblems()).some((p) => p.id === "src-ok"), "rate limit must not mark a source as broken");
+
+    const idx = await core.loadIndex();
+    assert.ok(idx.sources.every((s) => /^[A-Za-z0-9._-]+$/.test(s.id)), "sources without an id are dropped");
+  } finally {
+    globalThis.fetch = realFetch;
+    delete process.env.GITHUB_TOKEN;
+    delete process.env.SKILL_NINJA_HOME;
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
 test("stale sources, localize, create skill, upstream sync, web search", async () => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
   process.env.SKILL_NINJA_HOME = home;

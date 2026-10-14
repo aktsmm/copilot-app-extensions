@@ -149,10 +149,15 @@ export async function loadIndex() {
   const sources = [...(index.sources ?? [])];
   const haveSrc = new Set(sources.map((s) => s.id));
   for (const s of [...(cache.sources ?? []), ...extraSources, ...shared]) if (!haveSrc.has(s.id)) (haveSrc.add(s.id), sources.push(s));
+  // Entries without a usable id/URL (e.g. malformed catalog rows) can't be tracked, so drop them.
+  const overrides = cfg.overrides ?? {};
+  const valid = sources
+    .filter((s) => s && isSafeName(s.id ?? "") && /github\.com\/[^/]+\/[^/]+/.test(s.url ?? ""))
+    .map((s) => (overrides[s.id] ? { ...s, ...overrides[s.id], overridden: true } : s));
   const localized = cfg.localized ?? {};
   const merged = skills.map((s) => (localized[`${s.source}/${s.name}`] ? { ...s, description_ja: localized[`${s.source}/${s.name}`] } : s));
   return {
-    sources,
+    sources: valid,
     skills: merged,
     bundles: index.bundles ?? [],
     lastUpdated: cache.refreshedAt ?? index.lastUpdated,
@@ -200,32 +205,90 @@ export async function syncUpstream(fetchImpl = fetch) {
 export const STALE_DAYS = 30;
 export const MAX_STALE_PER_RUN = 5;
 
+export const readCache = () => readJson(CACHE_PATH, {});
+
+// ---------- source health: ignore / override URL / failure memory ----------
+export async function setIgnored(id, on) {
+  if (!isSafeName(id)) throw new Error("invalid id");
+  const cfg = await loadConfig();
+  const set = new Set(cfg.ignored ?? []);
+  on ? set.add(id) : set.delete(id);
+  await writeJson(CONFIG_PATH, { ...cfg, ignored: [...set] });
+}
+
+// Point an existing source (bundled, shared or user-added) at a different repository/branch.
+export async function setSourceUrl(id, url, branch) {
+  if (!isSafeName(id)) throw new Error("invalid id");
+  parseRepo(url);
+  if (branch && !SHARED_BRANCH.test(branch)) throw new Error("invalid branch");
+  const cfg = await loadConfig();
+  const fails = (await readJson(CACHE_PATH, {})).fails ?? {};
+  await writeJson(CONFIG_PATH, { ...cfg, overrides: { ...(cfg.overrides ?? {}), [id]: { url, ...(branch ? { branch } : {}) } } });
+  if (fails[id]) await clearFailure(id);
+}
+
+async function clearFailure(id) {
+  const cache = await readJson(CACHE_PATH, { skills: [] });
+  if (cache.fails?.[id]) {
+    delete cache.fails[id];
+    await writeJson(CACHE_PATH, cache);
+  }
+}
+
+const repoLabel = (s) => {
+  try {
+    const { owner, repo } = parseRepo(s.url);
+    return `${owner}/${repo}`;
+  } catch {
+    return s.url ?? s.id;
+  }
+};
+
+// Sources that failed their last scan (and are not muted), with a human-readable reason.
+export async function sourceProblems(index = null) {
+  index ??= await loadIndex();
+  const cache = await readJson(CACHE_PATH, {});
+  const ignored = new Set((await loadConfig()).ignored ?? []);
+  return index.sources
+    .filter((s) => cache.fails?.[s.id] && !ignored.has(s.id))
+    .map((s) => ({ id: s.id, name: s.name || s.id, repo: repoLabel(s), url: s.url, ...cache.fails[s.id] }));
+}
+
 // Sources whose last scan is older than STALE_DAYS (or unknown), oldest first.
+// Muted and failing sources are excluded so the banner can't nag forever; failures surface via sourceProblems().
 export async function staleSources(index = null, now = Date.now()) {
   index ??= await loadIndex();
-  const scans = (await readJson(CACHE_PATH, {})).scans ?? {};
+  const cache = await readJson(CACHE_PATH, {});
+  const scans = cache.scans ?? {};
+  const ignored = new Set((await loadConfig()).ignored ?? []);
   const out = [];
   for (const s of index.sources) {
+    if (ignored.has(s.id) || cache.fails?.[s.id]) continue;
     const at = Date.parse(scans[s.id] ?? s.lastIndexedAt ?? "");
     const days = Number.isFinite(at) ? Math.floor((now - at) / 86400000) : null;
-    if (days === null || days >= STALE_DAYS) out.push({ id: s.id, name: s.name || s.id, days, unknown: days === null });
+    if (days === null || days >= STALE_DAYS) out.push({ id: s.id, name: s.name || s.id, repo: repoLabel(s), days, unknown: days === null });
   }
   return out.sort((a, b) => (b.days ?? 1e9) - (a.days ?? 1e9));
 }
 
 // Scan source repos for SKILL.md and cache skills missing from the catalog. `limit` caps sources per run.
+// Explicitly requested ids are scanned even if muted/failed (that's the "retry" path).
 export async function refreshIndex(sourceIds, { limit } = {}) {
   const index = await loadIndex();
   const known = new Set(index.skills.map((s) => `${s.source}/${s.path}`));
   const cache = await readJson(CACHE_PATH, { skills: [] });
   const scans = { ...(cache.scans ?? {}) };
+  const fails = { ...(cache.fails ?? {}) };
+  const ignored = new Set((await loadConfig()).ignored ?? []);
   const added = [];
   const errors = [];
-  let targets = index.sources.filter((s) => !sourceIds?.length || sourceIds.includes(s.id));
+  const failed = [];
+  let targets = index.sources.filter((s) => (sourceIds?.length ? sourceIds.includes(s.id) : !ignored.has(s.id) && !fails[s.id]));
   if (limit) {
     const order = new Map((await staleSources(index)).map((s, i) => [s.id, i]));
     targets = targets.filter((s) => order.has(s.id)).sort((a, b) => order.get(a.id) - order.get(b.id)).slice(0, limit);
   }
+  let scanned = 0;
   for (const source of targets) {
     try {
       const tree = await getTree(source, true);
@@ -238,13 +301,21 @@ export async function refreshIndex(sourceIds, { limit } = {}) {
         added.push({ name, source: source.id, path: dir, categories: [], description: "" });
       }
       scans[source.id] = new Date().toISOString();
+      delete fails[source.id];
+      scanned++;
     } catch (e) {
-      errors.push(`${source.id}: ${e.message}`);
+      const kind = e.kind ?? "error";
+      const info = { id: source.id, name: source.name || source.id, repo: repoLabel(source), kind, message: String(e.message ?? e), ssoUrl: e.ssoUrl };
+      failed.push(info);
+      errors.push(`${info.repo}: ${info.message}`);
+      // A rate limit says nothing about this source, so don't mark it broken; stop, since the rest would fail too.
+      if (kind === "rate") break;
+      fails[source.id] = { at: new Date().toISOString(), kind, message: info.message, ...(e.ssoUrl ? { ssoUrl: e.ssoUrl } : {}) };
     }
   }
   const skills = [...(cache.skills ?? []), ...added];
-  await writeJson(CACHE_PATH, { ...cache, refreshedAt: new Date().toISOString().slice(0, 10), skills, scans });
-  return { added: added.length, scanned: targets.length - errors.length, errors };
+  await writeJson(CACHE_PATH, { ...cache, refreshedAt: new Date().toISOString().slice(0, 10), skills, scans, fails });
+  return { added: added.length, scanned, errors, failed };
 }
 
 // ---------- localization (Japanese summaries supplied by the agent or user) ----------
@@ -357,14 +428,29 @@ export async function getToken() {
   return tokenCache;
 }
 
+export class GhError extends Error {
+  constructor(status, kind, message, extra = {}) {
+    super(message);
+    this.status = status;
+    this.kind = kind;
+    Object.assign(this, extra);
+  }
+}
+
 async function ghGet(url, accept = "application/vnd.github+json") {
   const headers = { Accept: accept, "User-Agent": "skill-ninja-copilot-app", "X-GitHub-Api-Version": "2022-11-28" };
   const token = await getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   const res = await fetch(url, { headers });
   if (!res.ok) {
-    const hint = res.status === 403 || res.status === 429 ? " (rate limited? set GITHUB_TOKEN or run `gh auth login`)" : "";
-    throw new Error(`GitHub ${res.status} for ${url}${hint}`);
+    const sso = /url=(\S+)/.exec(res.headers.get("x-github-sso") ?? "")?.[1];
+    const remaining = res.headers.get("x-ratelimit-remaining");
+    if (sso) throw new GhError(res.status, "sso", "組織の SSO 認可が必要です", { ssoUrl: sso });
+    if (res.status === 429 || (res.status === 403 && remaining === "0")) throw new GhError(res.status, "rate", "GitHub のレート制限に達しました。時間をおくか `gh auth login` してください");
+    if (res.status === 401) throw new GhError(401, "auth", "認証に失敗しました（`gh auth login` を確認）");
+    if (res.status === 404) throw new GhError(404, "notfound", token ? "見つかりません（削除・改名・または非公開でアクセス権なし）" : "見つかりません（非公開の場合は `gh auth login` が必要）");
+    if (res.status === 403) throw new GhError(403, "forbidden", "アクセスが拒否されました（権限不足または SSO 未認可）");
+    throw new GhError(res.status, "http", `GitHub ${res.status}`);
   }
   return res;
 }
@@ -375,10 +461,17 @@ export function parseRepo(url) {
   return { owner: m[1], repo: m[2] };
 }
 
+const branchCache = new Map();
+async function defaultBranch(owner, repo) {
+  const k = `${owner}/${repo}`;
+  if (!branchCache.has(k)) branchCache.set(k, (await (await ghGet(`https://api.github.com/repos/${owner}/${repo}`)).json()).default_branch || "main");
+  return branchCache.get(k);
+}
+
 const treeCache = new Map();
 export async function getTree(source, fresh = false) {
   const { owner, repo } = parseRepo(source.url);
-  const branch = source.branch || "main";
+  const branch = source.branch || (await defaultBranch(owner, repo));
   const key = `${owner}/${repo}@${branch}`;
   const hit = treeCache.get(key);
   if (hit && !fresh && Date.now() - hit.at < 60000) return hit.tree;
@@ -512,7 +605,7 @@ export async function fetchSkillMd(source, skill) {
   const k = `${source.id}/${skill.path}`;
   if (mdCache.has(k)) return mdCache.get(k);
   const { owner, repo } = parseRepo(source.url);
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${skill.path.split("/").map(encodeURIComponent).join("/")}/SKILL.md?ref=${encodeURIComponent(source.branch || "main")}`;
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${skill.path.split("/").map(encodeURIComponent).join("/")}/${encodeURIComponent("SKILL.md")}${source.branch ? `?ref=${encodeURIComponent(source.branch)}` : ""}`;
   const text = await (await ghGet(url, "application/vnd.github.raw+json")).text();
   mdCache.set(k, text);
   return text;
