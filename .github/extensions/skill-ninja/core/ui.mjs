@@ -4,7 +4,8 @@ import crypto from "node:crypto";
 import {
   loadIndex, searchSkills, getFacets, findSkill, installSkill, uninstallSkill, listInstalled, checkUpdates,
   fetchSkillMd, describeSkill, getFavorites, toggleFavorite, getPins, togglePin, importFromVsCode, recommendSkills, projectContext,
-  loadConfig, addSource, removeSource, refreshIndex,
+  loadConfig, addSource, removeSource, refreshIndex, staleSources, STALE_DAYS, MAX_STALE_PER_RUN,
+  installBundle, setLocalized, webSearchSkills, createSkill, syncUpstream,
 } from "./core.mjs";
 
 const PAGE = 24;
@@ -49,6 +50,8 @@ a{color:var(--ac);text-decoration:none}a:hover{text-decoration:underline}
 <span class="seg" title="インストール先"><button id="s-user" class="on">user</button><button id="s-project">project</button></span>
 <span class="seg" title="説明の言語"><button id="l-ja" class="on">日本語</button><button id="l-en">EN</button></span></div>
 <div class="row" id="filters"><select id="src"><option value="">すべてのソース</option></select><select id="cat"><option value="">すべてのカテゴリ</option></select><label><input id="favonly" type="checkbox" style="flex:none;min-width:0"> ★のみ</label></div>
+<div class="meta" id="scopehelp" style="margin-top:6px"></div>
+<div id="stalebar" class="row" style="display:none;background:#bf870022;border-radius:6px;padding:4px 8px"><span id="staletxt"></span><button id="stalego" class="primary">今すぐ更新</button><button id="stalex">後で</button></div>
 </header>
 <div id="list"></div><div id="toast"></div>
 <script>
@@ -80,13 +83,16 @@ function card(s){
     +(S.updates.some(u=>u.name===s.name&&u.scope===sc)?'<span class="tag upd">更新あり</span>':'')
     +(s.source?'<span class="tag">'+esc(s.source)+'</span>':'')+(s.categories||[]).slice(0,3).map(c=>'<span class="tag">#'+esc(c)+'</span>').join("");
   const dd=descOf(s);
+  const noJa=S.lang==="ja"&&s.source&&!s.description_ja&&dd;
+  const locRow=S.loc===fk?'<div class="row"><input id="locin" placeholder="日本語の要約を入力" value="">'+'<button data-a="loc-save" data-n="'+esc(s.name)+'" data-s="'+esc(s.source)+'" class="primary">保存</button><button data-a="loc-x">×</button></div>':'';
+  const locLink=noJa?' · <a href="#" data-a="loc" data-n="'+esc(s.name)+'" data-s="'+esc(s.source)+'">日本語要約を追加</a>':'';
   const d=dd?esc(dd):(s.source?'<i data-desc="'+esc(s.name)+'" data-s="'+esc(s.source)+'">説明を取得中…</i>':'<i>説明なし</i>');
   const link=s.url?' <a href="'+esc(s.url)+'" target="_blank" rel="noopener">GitHub</a>':'';
   const star=s.source?'<button data-a="pin" data-n="'+esc(s.name)+'" data-s="'+esc(s.source)+'" title="ピン留め（先頭に表示）" style="border:0;background:none;padding:0 2px;font-size:14px;opacity:'+(S.pins.has(fk)?1:.35)+'">📌</button><button class="star" data-a="fav" data-n="'+esc(s.name)+'" data-s="'+esc(s.source)+'" title="お気に入り" style="border:0;background:none;padding:0 4px;font-size:16px;color:'+(fav?'#e3b341':'var(--mut)')+'">'+(fav?'★':'☆')+'</button>':'';
   const open=S.open===fk&&s.source;
   const prev=s.source?'<a href="#" data-a="prev" data-n="'+esc(s.name)+'" data-s="'+esc(s.source)+'">'+(open?'プレビューを閉じる':'SKILL.md をプレビュー')+'</a>':'';
   const pv=open?'<pre style="white-space:pre-wrap;max-height:260px;overflow:auto;border:1px solid var(--bd);border-radius:6px;padding:8px;font-size:12px;margin:6px 0 0">'+(S.md[fk]===undefined?'読み込み中…':esc(S.md[fk]))+'</pre>':'';
-  return '<div class="card"><div class="main"><div class="name">'+star+esc(s.name)+link+'</div><div class="desc">'+d+'</div><div>'+tags+'</div><div class="meta" style="margin-top:4px">'+prev+'</div>'+pv+'</div><div class="act">'+actions(s)+'</div></div>';
+  return '<div class="card"><div class="main"><div class="name">'+star+esc(s.name)+link+'</div><div class="desc">'+d+'</div><div>'+tags+'</div><div class="meta" style="margin-top:4px">'+prev+locLink+'</div>'+locRow+pv+'</div><div class="act">'+actions(s)+'</div></div>';
 }
 function bind(items){
   document.querySelectorAll("[data-a]").forEach(b=>b.onclick=e=>{e.preventDefault();act(b.dataset.a,b.dataset.n,b.dataset.s,items)});
@@ -104,9 +110,13 @@ async function fillDescriptions(){
 async function act(a,name,source){
   const sc=S.scope,k=key(name,sc),fk=source+"/"+name;
   if(a==="fav"){const r=await api("favorite",{name,source}).catch(e=>toast(e.message,"err"));if(r){r.on?S.favs.add(fk):S.favs.delete(fk);if(S.tab==="search"&&$("#favonly").checked&&!r.on)view=view.filter(v=>!(v.name===name&&v.source===source));draw()}return}
-  if(a==="prev"){if(S.open===fk){S.open=null;return draw()}S.open=fk;draw();
-    if(S.md[fk]===undefined){try{S.md[fk]=(await api("preview?name="+encodeURIComponent(name)+"&source="+encodeURIComponent(source))).markdown}catch(e){S.md[fk]="取得できませんでした: "+e.message}draw()}return}
+  if(a==="prev"){const tab0=S.tab;if(S.open===fk){S.open=null;return draw()}S.open=fk;draw();
+    if(S.md[fk]===undefined){try{S.md[fk]=(await api("preview?name="+encodeURIComponent(name)+"&source="+encodeURIComponent(source))).markdown}catch(e){S.md[fk]="取得できませんでした: "+e.message}if(S.tab===tab0)draw()}return}
   if(a==="pin"){const r=await api("pin",{name,source}).catch(e=>toast(e.message,"err"));if(r){r.on?S.pins.add(fk):S.pins.delete(fk);if(S.tab==="search")return fetchSearch(false);draw()}return}
+  if(a==="loc"){S.loc=fk;return draw()}
+  if(a==="loc-x"){S.loc=null;return draw()}
+  if(a==="loc-save"){const text=($("#locin")||{}).value||"";if(!text.trim())return toast("要約を入力してください","err");
+    try{await api("localize",{source,name,text});const sk=[...view,...S.rec].find(v=>v.name===name&&v.source===source);if(sk)sk.description_ja=text.trim();S.loc=null;toast("日本語要約を保存しました","ok");draw()}catch(e){toast(e.message,"err")}return}
   if(a==="upd-all"){return updateAll()}
   if(a==="del"){S.confirm=k;return draw()}
   if(a==="del-no"){S.confirm=null;return draw()}
@@ -128,18 +138,39 @@ async function updateAll(){
 }
 async function drawSources(){
   const l=$("#list");l.innerHTML='<div class="empty"><span class="spin"></span>読み込み中…</div>';
-  try{const r=await api("sources");
-    l.innerHTML='<div class="row"><input id="sid" placeholder="ID（例: my-skills）" style="max-width:150px"><input id="surl" placeholder="https://github.com/owner/repo"><button id="sadd" class="primary">追加</button></div>'
-      +'<div class="row"><button id="simport" class="primary">VS Code 版からインポート</button><button id="srefresh">全ソースを再スキャン</button></div><div class="meta">インポートは VS Code 版 Agent Skills Ninja に登録済みのソースとスキャン済みスキルを取り込みます。再スキャンはソース内の新しい SKILL.md を検出します。</div>'
-      +r.items.map(s=>'<div class="card"><div class="main"><div class="name">'+esc(s.name)+'</div><div class="meta"><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(s.url)+'</a></div></div><div class="act">'+(s.removable?'<button class="danger" data-rm="'+esc(s.id)+'">削除</button>':'<span class="meta">標準</span>')+'</div></div>').join("");
+  try{
+    const [r,st,bd]=await Promise.all([api("sources"),api("stale"),api("bundles")]);
+    const stale=new Map(st.items.map(x=>[x.id,x]));
+    S.stale=st.items;
+    const banner=st.items.length?'<div class="card" style="border-color:#bf8700"><div class="main"><b>'+st.items.length+' 個のソースが '+st.days+' 日以上再スキャンされていません</b><div class="meta">一度に最大 '+st.max+' 件まで、古い順に再スキャンします（GitHub のレート制限対策）。</div></div><div class="act"><button id="sstale" class="primary">古いソースを更新</button></div></div>':'<div class="meta">すべてのソースが '+st.days+' 日以内にスキャン済みです</div>';
+    l.innerHTML=banner
+      +'<h3 style="font-size:14px;margin:14px 0 4px">ソースを追加</h3><div class="row"><input id="sid" placeholder="ID（例: my-skills）" style="max-width:150px"><input id="surl" placeholder="https://github.com/owner/repo"><button id="sadd" class="primary">追加</button></div>'
+      +'<div class="row"><input id="wq" placeholder="GitHub でスキル集を探す（例: azure）"><button id="wgo">Web 検索</button></div><div id="wres"></div>'
+      +'<div class="row"><button id="simport">VS Code 版からインポート</button><button id="srefresh">全ソースを再スキャン</button></div><div class="meta">インポートは VS Code 版 Agent Skills Ninja のソース・スキャン済みスキルを取り込みます。</div>'
+      +(bd.items.length?'<h3 style="font-size:14px;margin:14px 0 4px">バンドル（まとめてインストール）</h3>'+bd.items.map(b=>'<div class="card"><div class="main"><div class="name">'+esc(b.name)+'</div><div class="desc">'+esc((S.lang==="ja"&&b.description_ja)||b.description||"")+'</div><div class="meta">'+esc((b.skills||[]).join(", "))+'</div></div><div class="act"><button class="primary" data-bundle="'+esc(b.id)+'">'+S.scope+' に導入</button></div></div>').join(""):"")
+      +'<h3 style="font-size:14px;margin:14px 0 4px">登録済みソース（'+r.items.length+'）</h3>'
+      +r.items.map(s=>{const k=stale.get(s.id);return '<div class="card"><div class="main"><div class="name">'+esc(s.name)+'</div><div class="meta"><a href="'+esc(s.url)+'" target="_blank" rel="noopener">'+esc(s.url)+'</a></div><div>'+(k?'<span class="tag upd">'+(k.unknown?'未スキャン':k.days+' 日前にスキャン')+'</span>':'<span class="tag ok">最新</span>')+'</div></div><div class="act"><button data-scan="'+esc(s.id)+'">再スキャン</button>'+(s.removable?'<button class="danger" data-rm="'+esc(s.id)+'">削除</button>':'<span class="meta" style="text-align:center">標準</span>')+'</div></div>'}).join("");
+    const scan=async(body,btn,label)=>{if(btn){btn.disabled=true;btn.textContent="スキャン中…"}try{const x=await api("refresh",body);toast("新規 "+x.added+" 件（"+x.scanned+" ソース）"+(x.errors.length?"、エラー "+x.errors.length+" 件":""),x.errors.length?"err":"ok");S.dirtyFacets=true;await refreshFacets();drawSources()}catch(e){toast(e.message,"err");if(btn){btn.disabled=false;btn.textContent=label}}};
     $("#sadd").onclick=async()=>{try{await api("source",{id:$("#sid").value.trim(),url:$("#surl").value.trim()});toast("ソースを追加しました","ok");drawSources()}catch(e){toast(e.message,"err")}};
-    $("#simport").onclick=async()=>{const b=$("#simport");b.disabled=true;try{const x=await api("import",{});toast(x.files.length?"ソース "+x.sources.length+" 件・スキル "+x.skills+" 件を取り込みました":"VS Code 版のデータが見つかりませんでした",x.files.length?"ok":"err");if(x.files.length){await api("facets").then(f=>{$("#count").textContent=f.total+" skills";$("#src").innerHTML='<option value="">すべてのソース</option>'+f.sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.name)+' ('+s.count+')</option>').join("")});drawSources()}}catch(e){toast(e.message,"err")}b.disabled=false};
-    $("#srefresh").onclick=async()=>{const b=$("#srefresh");b.disabled=true;b.textContent="スキャン中…";try{const x=await api("refresh",{});toast("新規 "+x.added+" 件"+(x.errors.length?"（エラー "+x.errors.length+" 件）":""),x.errors.length?"err":"ok")}catch(e){toast(e.message,"err")}b.disabled=false;b.textContent="全ソースを再スキャン"};
+    $("#simport").onclick=async()=>{const b=$("#simport");b.disabled=true;try{const x=await api("import",{});toast(x.files.length?"ソース "+x.sources.length+" 件・スキル "+x.skills+" 件を取り込みました":"VS Code 版のデータが見つかりませんでした",x.files.length?"ok":"err");if(x.files.length){await refreshFacets();drawSources()}}catch(e){toast(e.message,"err")}b.disabled=false};
+    $("#srefresh").onclick=()=>scan({},$("#srefresh"),"全ソースを再スキャン");
+    const ss=$("#sstale");if(ss)ss.onclick=()=>scan({stale:true},ss,"古いソースを更新");
+    l.querySelectorAll("[data-scan]").forEach(b=>b.onclick=()=>scan({ids:[b.dataset.scan]},b,"再スキャン"));
     l.querySelectorAll("[data-rm]").forEach(b=>b.onclick=async()=>{try{await api("source-remove",{id:b.dataset.rm});drawSources()}catch(e){toast(e.message,"err")}});
+    l.querySelectorAll("[data-bundle]").forEach(b=>b.onclick=async()=>{b.disabled=true;try{const x=await api("bundle-install",{id:b.dataset.bundle,scope:S.scope});const n=x.items.filter(i=>i.status==="installed").length;toast(n+" 件をインストール（"+x.items.length+" 件中）",n?"ok":"err");await loadInstalled()}catch(e){toast(e.message,"err")}b.disabled=false});
+    $("#wgo").onclick=async()=>{const w=$("#wres");w.innerHTML='<div class="empty"><span class="spin"></span>検索中…</div>';try{const x=await api("websearch?q="+encodeURIComponent($("#wq").value));w.innerHTML=x.items.length?x.items.map((i,n)=>'<div class="card"><div class="main"><div class="name">'+esc(i.id)+' <span class="meta">★'+i.stars+'</span></div><div class="desc">'+esc(i.description)+'</div><div class="meta"><a href="'+esc(i.url)+'" target="_blank" rel="noopener">'+esc(i.url)+'</a></div></div><div class="act"><button data-wadd="'+n+'">ソースに追加</button></div></div>').join(""):'<div class="empty">見つかりませんでした</div>';
+      w.querySelectorAll("[data-wadd]").forEach(b=>b.onclick=async()=>{const i=x.items[b.dataset.wadd];try{await api("source",{id:i.id,url:i.url});toast(i.id+" を追加しました。再スキャンでスキルを取り込めます","ok");drawSources()}catch(e){toast(e.message,"err")}})}catch(e){w.innerHTML='';toast(e.message,"err")}};
   }catch(e){l.innerHTML='<div class="empty err">'+esc(e.message)+'</div>'}
 }
+async function refreshFacets(){const f=await api("facets");$("#count").textContent=f.total+" skills";$("#src").innerHTML='<option value="">すべてのソース</option>'+f.sources.map(s=>'<option value="'+esc(s.id)+'">'+esc(s.name)+' ('+s.count+')</option>').join("")}
 let view=[],total=0,searchSeq=0;
+const KEEP=["#cname","#cdesc","#locin"];
 function draw(){
+  const keep=KEEP.map(s=>{const e=$(s);return e?[s,e.value,document.activeElement===e]:null}).filter(Boolean);
+  render();
+  for(const [s,v,f] of keep){const e=$(s);if(e){e.value=v;if(f)e.focus()}}
+}
+function render(){
   const l=$("#list");
   if(S.tab==="search"){
     if(!view.length){l.innerHTML='<div class="empty">該当するスキルがありません</div>';return}
@@ -150,8 +181,12 @@ function draw(){
   }else if(S.tab==="inst"){
     const q=$("#q").value.toLowerCase();
     const items=S.installed.filter(i=>i.scope===S.scope&&(!q||(i.name+" "+i.description).toLowerCase().includes(q)))
-      .sort((a,b)=>(S.pins.has(b.source+"/"+b.dir)-S.pins.has(a.source+"/"+a.dir))||a.dir.localeCompare(b.dir));
-    l.innerHTML=items.length?'<div class="meta">'+S.scope+' に '+items.length+' 件</div>'+items.map(i=>card({name:i.dir,description:i.description,categories:[],source:i.source})).join(""):'<div class="empty">'+S.scope+' にインストール済みのスキルはありません</div>';
+      .sort((a,b)=>(S.pins.has(b.source+"/"+b.dir)-S.pins.has(a.source+"/"+a.dir))||String(b.installedAt||"").localeCompare(String(a.installedAt||""))||a.dir.localeCompare(b.dir));
+    const form='<div class="row"><input id="cname" placeholder="新しいスキル名（例: my-skill）" style="max-width:200px"><input id="cdesc" placeholder="説明（任意）"><button id="cmk">'+S.scope+' に新規作成</button></div>';
+    l.innerHTML=form+(items.length?'<div class="meta">'+S.scope+' に '+items.length+' 件（ピン → 新しい順）</div>'+items.map(i=>card({name:i.dir,description:i.description,categories:[],source:i.source})).join(""):'<div class="empty">'+S.scope+' にインストール済みのスキルはありません</div>');
+    $("#cmk").onclick=async()=>{try{const r=await api("create",{name:$("#cname").value.trim(),description:$("#cdesc").value,scope:S.scope});if(r.status==="exists")return toast("同名のスキルが既にあります","err");toast("作成しました: "+r.dest,"ok");await loadInstalled();draw()}catch(e){toast(e.message,"err")}};
+  }else if(S.tab==="src"){
+    return drawSources();
   }else{
     const us=S.updates.filter(u=>u.scope===S.scope);
     l.innerHTML=us.length?'<div class="row"><button class="primary" data-a="upd-all">すべて更新（'+us.length+'）</button></div>'+us.map(u=>card({name:u.name,source:u.source,description:"上流の内容が変更されています",categories:[]})).join(""):'<div class="empty">'+S.scope+' に更新はありません（更新確認は Skill Ninja で導入したスキルが対象です）</div>';
@@ -179,7 +214,8 @@ async function show(tab){
   try{S.updates=(await api("updates")).items}catch(e){toast(e.message,"err")}
   draw();
 }
-function setScope(sc){S.scope=sc;$("#s-user").className=sc==="user"?"on":"";$("#s-project").className=sc==="project"?"on":"";draw()}
+const SCOPE_HELP={user:"<b>user</b>: あなたの全プロジェクトで使えます（~/.copilot/skills）。個人用はこちら。",project:"<b>project</b>: このリポジトリだけで使えます（.github/skills）。コミットすればチームで共有できます。"};
+function setScope(sc){S.scope=sc;$("#s-user").className=sc==="user"?"on":"";$("#s-project").className=sc==="project"?"on":"";$("#scopehelp").innerHTML=SCOPE_HELP[sc];draw()}
 let deb;$("#q").oninput=()=>{clearTimeout(deb);deb=setTimeout(()=>S.tab==="search"?fetchSearch(false):draw(),250)};
 $("#src").onchange=$("#cat").onchange=()=>fetchSearch(false);
 $("#t-search").onclick=()=>show("search");$("#t-rec").onclick=()=>show("rec");$("#t-inst").onclick=()=>show("inst");$("#t-upd").onclick=()=>show("upd");$("#t-src").onclick=()=>show("src");
@@ -198,6 +234,10 @@ document.addEventListener("keydown",e=>{if(e.key==="/"&&document.activeElement!=
     const fv=await api("favorites");S.favs=new Set(fv.items);S.pins=new Set(fv.pins);
     await loadInstalled();
   }catch(e){toast(e.message,"err")}
+  setScope("user");
+  api("stale").then(st=>{if(!st.items.length)return;$("#staletxt").textContent=st.items.length+" 個のソースが "+st.days+" 日以上未更新です";$("#stalebar").style.display="flex";
+    $("#stalex").onclick=()=>$("#stalebar").style.display="none";
+    $("#stalego").onclick=async()=>{const b=$("#stalego");b.disabled=true;b.textContent="更新中…";try{const x=await api("refresh",{stale:true});toast("新規 "+x.added+" 件（"+x.scanned+" ソース、最大 "+st.max+" 件ずつ）"+(x.errors.length?"、エラー "+x.errors.length+" 件":""),x.errors.length?"err":"ok");await refreshFacets();const n=await api("stale");if(n.items.length){$("#staletxt").textContent=n.items.length+" 個のソースが "+n.days+" 日以上未更新です";b.disabled=false;b.textContent="続けて更新"}else $("#stalebar").style.display="none"}catch(e){toast(e.message,"err");b.disabled=false;b.textContent="今すぐ更新"}}}).catch(()=>{});
   fetchSearch(false);
 })();
 </script></html>`;
@@ -278,7 +318,31 @@ export async function startUiServer(getCwd, onChange = async () => {}) {
         const b = await readBody(req);
         return json(res, 200, { ok: await removeSource(String(b.id ?? "")) });
       }
-      if (req.method === "POST" && url.pathname === "/api/refresh") return json(res, 200, await refreshIndex());
+      if (req.method === "POST" && url.pathname === "/api/refresh") {
+        const b = await readBody(req).catch(() => ({}));
+        await syncUpstream().catch(() => {});
+        return json(res, 200, await refreshIndex(b.ids, b.stale ? { limit: MAX_STALE_PER_RUN } : {}));
+      }
+      if (url.pathname === "/api/stale") return json(res, 200, { items: await staleSources(index), days: STALE_DAYS, max: MAX_STALE_PER_RUN });
+      if (url.pathname === "/api/bundles") return json(res, 200, { items: index.bundles });
+      if (req.method === "POST" && url.pathname === "/api/bundle-install") {
+        const b = await readBody(req);
+        const r = await installBundle({ bundleId: String(b.id ?? ""), scope: scopeOf(b.scope), cwd, overwrite: false });
+        if (r.some((x) => x.status === "installed")) await onChange();
+        return json(res, 200, { items: r });
+      }
+      if (req.method === "POST" && url.pathname === "/api/localize") {
+        const b = await readBody(req);
+        await setLocalized(String(b.source ?? ""), String(b.name ?? ""), String(b.text ?? ""));
+        return json(res, 200, { ok: true });
+      }
+      if (url.pathname === "/api/websearch") return json(res, 200, { items: await webSearchSkills(q.get("q") ?? "") });
+      if (req.method === "POST" && url.pathname === "/api/create") {
+        const b = await readBody(req);
+        const r = await createSkill({ name: String(b.name ?? ""), description: b.description, scope: scopeOf(b.scope), cwd });
+        if (r.status === "created") await onChange();
+        return json(res, 200, r);
+      }
       if (url.pathname === "/api/search") {
         const limit = Math.min(Math.max(parseInt(q.get("limit")) || PAGE, 1), 100);
         const offset = Math.max(parseInt(q.get("offset")) || 0, 0);

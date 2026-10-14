@@ -6,6 +6,7 @@ import { joinSession, createCanvas } from "@github/copilot-sdk/extension";
 import {
     loadIndex, searchSkills, findSkill, installSkill, uninstallSkill, listInstalled,
     recommendSkills, skillsRoot, addSource, removeSource, refreshIndex, checkUpdates, importFromVsCode,
+    syncUpstream, staleSources, STALE_DAYS, MAX_STALE_PER_RUN, setLocalized, installBundle, createSkill, webSearchSkills,
 } from "./core/core.mjs";
 import { startUiServer } from "./core/ui.mjs";
 
@@ -191,13 +192,82 @@ const session = await joinSession({
         },
         {
             name: "skill_ninja_update_skill_index",
-            description: "Scan catalog sources (all, or the given source ids) for new SKILL.md entries and cache them.",
+            description: "Scan catalog sources for new SKILL.md entries and cache them. Pass stale=true to scan only sources not scanned for 30+ days (max 5 per run, oldest first); also pulls the latest VS Code extension catalog.",
             skipPermission: true,
-            parameters: { type: "object", properties: { sources: { type: "array", items: { type: "string" } } } },
-            handler: async ({ sources } = {}) => {
-                const r = await refreshIndex(sources);
+            parameters: { type: "object", properties: { sources: { type: "array", items: { type: "string" } }, stale: { type: "boolean" } } },
+            handler: async ({ sources, stale } = {}) => {
+                let up = "";
+                try {
+                    const u = await syncUpstream();
+                    up = `Upstream catalog: +${u.sources} source(s), +${u.skills} skill(s).\n`;
+                } catch (e) {
+                    up = `Upstream catalog unavailable: ${e.message}\n`;
+                }
+                const r = await refreshIndex(sources, stale ? { limit: MAX_STALE_PER_RUN } : {});
                 const i = await loadIndex();
-                return `Scan done: ${r.added} new skill(s). Catalog: ${i.skills.length} skills, ${i.sources.length} sources.${r.errors.length ? `\nErrors:\n${r.errors.join("\n")}` : ""}`;
+                const left = await staleSources(i);
+                return `${up}Scan done: ${r.added} new skill(s) from ${r.scanned} source(s). Catalog: ${i.skills.length} skills, ${i.sources.length} sources. ${left.length} source(s) older than ${STALE_DAYS} days.${r.errors.length ? `\nErrors:\n${r.errors.join("\n")}` : ""}`;
+            },
+        },
+        {
+            name: "skill_ninja_localize_skill",
+            description: "Save a Japanese summary (description_ja) for a catalog skill. Translate the skill's description yourself, then call this.",
+            skipPermission: true,
+            parameters: {
+                type: "object",
+                properties: { name: { type: "string" }, source: { type: "string" }, text: { type: "string", description: "Japanese summary, up to ~200 chars" } },
+                required: ["name", "source", "text"],
+            },
+            handler: async ({ name, source, text }) => {
+                try {
+                    await setLocalized(source, name, text);
+                    return `Saved Japanese summary for ${source}/${name}.`;
+                } catch (e) {
+                    return fail(String(e.message ?? e));
+                }
+            },
+        },
+        {
+            name: "skill_ninja_install_bundle",
+            description: "Install every skill of a catalog bundle (existing ones are skipped).",
+            parameters: { type: "object", properties: { id: { type: "string" }, scope: scopeProp }, required: ["id"] },
+            handler: async ({ id, scope = "user" }) => {
+                try {
+                    const r = await installBundle({ bundleId: id, scope, cwd: cwdOf() });
+                    if (r.some((x) => x.status === "installed")) await reloadSkills();
+                    return r.map((x) => `- ${x.name}: ${x.status}${x.error ? ` (${x.error})` : ""}`).join("\n");
+                } catch (e) {
+                    return fail(String(e.message ?? e));
+                }
+            },
+        },
+        {
+            name: "skill_ninja_create_skill",
+            description: "Create a new skill scaffold (SKILL.md) in user or project scope.",
+            parameters: { type: "object", properties: { name: { type: "string" }, description: { type: "string" }, scope: scopeProp }, required: ["name"] },
+            handler: async ({ name, description, scope = "user" }) => {
+                try {
+                    const r = await createSkill({ name, description, scope, cwd: cwdOf() });
+                    if (r.status === "exists") return fail(`Already exists: ${r.dest}`);
+                    await reloadSkills();
+                    return `Created ${r.dest}/SKILL.md. Edit it to fill in the TODOs.`;
+                } catch (e) {
+                    return fail(String(e.message ?? e));
+                }
+            },
+        },
+        {
+            name: "skill_ninja_web_search_skills",
+            description: "Search GitHub for repositories that publish agent skills. Add a hit with skill_ninja_add_source.",
+            skipPermission: true,
+            parameters: { type: "object", properties: { query: { type: "string" } }, required: ["query"] },
+            handler: async ({ query }) => {
+                try {
+                    const r = await webSearchSkills(query);
+                    return r.length ? r.map((x) => `- ${x.id} ★${x.stars} ${x.url} ${x.description.slice(0, 100)}`).join("\n") : "No repositories found.";
+                } catch (e) {
+                    return fail(String(e.message ?? e));
+                }
             },
         },
     ],

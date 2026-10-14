@@ -110,6 +110,52 @@ test("favorites, pins, frontmatter, import from VS Code data", async () => {
   }
 });
 
+test("stale sources, localize, create skill, upstream sync, web search", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
+  process.env.SKILL_NINJA_HOME = home;
+  const core = await import(`../core/core.mjs?stale=${Date.now()}`);
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "sn-"));
+  try {
+    const stale = await core.staleSources(null, Date.parse("2030-01-01"));
+    assert.ok(stale.length > 0 && (stale[0].unknown || stale[0].days >= 30));
+    const few = await core.refreshIndex(undefined, { limit: 2 });
+    assert.equal(few.scanned + few.errors.length, 2);
+    const after = await core.staleSources(null, Date.now());
+    const scanned = JSON.parse(await fs.readFile(path.join(home, "skill-ninja-index-cache.json"), "utf8")).scans;
+    assert.ok(Object.keys(scanned).length >= 1 || few.errors.length === 2);
+    assert.ok(after.length >= 0);
+
+    await core.setLocalized("anthropics-skills", "docx", "Word 文書の作成・編集");
+    const docx = (await core.loadIndex()).skills.find((s) => s.name === "docx" && s.source === "anthropics-skills");
+    assert.equal(docx.description_ja, "Word 文書の作成・編集");
+    await assert.rejects(core.setLocalized("x", "../bad", "t"));
+
+    assert.equal((await core.createSkill({ name: "my-skill", description: "does: things", scope: "project", cwd })).status, "created");
+    assert.equal((await core.createSkill({ name: "my-skill", scope: "project", cwd })).status, "exists");
+    const listed = await core.listInstalled("project", cwd);
+    assert.equal(listed[0].description, "does: things");
+    await assert.rejects(core.createSkill({ name: "../x", scope: "project", cwd }));
+
+    const fake = async () => ({ ok: true, text: async () => JSON.stringify({
+      sources: [{ id: "new-official", url: "https://github.com/a/b", type: "official" }, { id: "priv", url: "https://github.com/a/c", type: "user-added" }],
+      skills: [{ name: "n1", source: "new-official", path: "skills/n1" }, { name: "n2", source: "priv", path: "skills/n2" }],
+    }) });
+    assert.deepEqual(await core.syncUpstream(fake), { sources: 1, skills: 1 });
+    assert.deepEqual(await core.syncUpstream(fake), { sources: 0, skills: 0 });
+    const idx = await core.loadIndex();
+    assert.ok(idx.sources.some((s) => s.id === "new-official") && !idx.sources.some((s) => s.id === "priv"));
+
+    const hits = await core.webSearchSkills("azure");
+    assert.ok(Array.isArray(hits));
+    const b = await core.installBundle({ bundleId: idx.bundles[0].id, scope: "project", cwd }).catch((e) => e);
+    assert.ok(Array.isArray(b));
+  } finally {
+    delete process.env.SKILL_NINJA_HOME;
+    await fs.rm(home, { recursive: true, force: true });
+    await fs.rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("install -> list -> uninstall (live GitHub)", async () => {
   const index = await loadIndex();
   const skill = index.skills.find((s) => s.source === "github-awesome-copilot");

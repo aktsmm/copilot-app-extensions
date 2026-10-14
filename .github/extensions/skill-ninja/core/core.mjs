@@ -83,23 +83,89 @@ export async function loadIndex() {
   const skills = [...(index.skills ?? [])];
   const seen = new Set(skills.map((s) => `${s.source}/${s.path}`));
   for (const s of cache.skills ?? []) if (!seen.has(`${s.source}/${s.path}`)) skills.push(s);
+  const sources = [...(index.sources ?? [])];
+  const haveSrc = new Set(sources.map((s) => s.id));
+  for (const s of [...(cache.sources ?? []), ...extraSources]) if (!haveSrc.has(s.id)) (haveSrc.add(s.id), sources.push(s));
+  const localized = cfg.localized ?? {};
+  const merged = skills.map((s) => (localized[`${s.source}/${s.name}`] ? { ...s, description_ja: localized[`${s.source}/${s.name}`] } : s));
   return {
-    sources: [...(index.sources ?? []), ...extraSources],
-    skills,
+    sources,
+    skills: merged,
+    bundles: index.bundles ?? [],
     lastUpdated: cache.refreshedAt ?? index.lastUpdated,
   };
 }
 
-// Scan source repos for SKILL.md and cache skills missing from the bundled catalog.
-export async function refreshIndex(sourceIds) {
+const UPSTREAM_URL = "https://raw.githubusercontent.com/aktsmm/vscode-agent-skill-ninja/master/resources/skill-index.json";
+
+// Pull the latest catalog published by the VS Code extension and cache whatever the bundled one lacks.
+export async function syncUpstream(fetchImpl = fetch) {
+  const res = await fetchImpl(UPSTREAM_URL, { headers: { "User-Agent": "skill-ninja-copilot-app" } });
+  if (!res.ok) throw new Error(`upstream catalog ${res.status}`);
+  const up = JSON.parse((await res.text()).replace(/^\uFEFF/, ""));
+  const index = await loadIndex();
+  const cache = await readJson(CACHE_PATH, { skills: [], sources: [] });
+  const haveSrc = new Set(index.sources.map((s) => s.id));
+  const sources = [];
+  for (const s of up.sources ?? []) {
+    if (s.type === "user-added" || haveSrc.has(s.id) || !isSafeName(s.id)) continue;
+    try {
+      parseRepo(s.url);
+    } catch {
+      continue;
+    }
+    haveSrc.add(s.id);
+    sources.push(s);
+  }
+  const known = new Set(index.skills.map((s) => `${s.source}/${s.path}`));
+  const skills = [];
+  for (const s of up.skills ?? []) {
+    const k = `${s.source}/${s.path}`;
+    if (!haveSrc.has(s.source) || known.has(k) || !isSafeName(s.name) || !isSafeRelPath(s.path)) continue;
+    known.add(k);
+    skills.push(s);
+  }
+  await writeJson(CACHE_PATH, {
+    ...cache,
+    refreshedAt: new Date().toISOString().slice(0, 10),
+    sources: [...(cache.sources ?? []), ...sources],
+    skills: [...(cache.skills ?? []), ...skills],
+  });
+  return { sources: sources.length, skills: skills.length };
+}
+
+export const STALE_DAYS = 30;
+export const MAX_STALE_PER_RUN = 5;
+
+// Sources whose last scan is older than STALE_DAYS (or unknown), oldest first.
+export async function staleSources(index = null, now = Date.now()) {
+  index ??= await loadIndex();
+  const scans = (await readJson(CACHE_PATH, {})).scans ?? {};
+  const out = [];
+  for (const s of index.sources) {
+    const at = Date.parse(scans[s.id] ?? s.lastIndexedAt ?? "");
+    const days = Number.isFinite(at) ? Math.floor((now - at) / 86400000) : null;
+    if (days === null || days >= STALE_DAYS) out.push({ id: s.id, name: s.name || s.id, days, unknown: days === null });
+  }
+  return out.sort((a, b) => (b.days ?? 1e9) - (a.days ?? 1e9));
+}
+
+// Scan source repos for SKILL.md and cache skills missing from the catalog. `limit` caps sources per run.
+export async function refreshIndex(sourceIds, { limit } = {}) {
   const index = await loadIndex();
   const known = new Set(index.skills.map((s) => `${s.source}/${s.path}`));
   const cache = await readJson(CACHE_PATH, { skills: [] });
+  const scans = { ...(cache.scans ?? {}) };
   const added = [];
   const errors = [];
-  for (const source of index.sources.filter((s) => !sourceIds?.length || sourceIds.includes(s.id))) {
+  let targets = index.sources.filter((s) => !sourceIds?.length || sourceIds.includes(s.id));
+  if (limit) {
+    const order = new Map((await staleSources(index)).map((s, i) => [s.id, i]));
+    targets = targets.filter((s) => order.has(s.id)).sort((a, b) => order.get(a.id) - order.get(b.id)).slice(0, limit);
+  }
+  for (const source of targets) {
     try {
-      const tree = await getTree(source);
+      const tree = await getTree(source, true);
       for (const e of tree.tree ?? []) {
         if (e.type !== "blob" || !/(^|\/)SKILL\.md$/.test(e.path)) continue;
         const dir = e.path.replace(/\/?SKILL\.md$/, "");
@@ -108,13 +174,67 @@ export async function refreshIndex(sourceIds) {
         known.add(`${source.id}/${dir}`);
         added.push({ name, source: source.id, path: dir, categories: [], description: "" });
       }
+      scans[source.id] = new Date().toISOString();
     } catch (e) {
       errors.push(`${source.id}: ${e.message}`);
     }
   }
   const skills = [...(cache.skills ?? []), ...added];
-  await writeJson(CACHE_PATH, { refreshedAt: new Date().toISOString().slice(0, 10), skills });
-  return { added: added.length, errors };
+  await writeJson(CACHE_PATH, { ...cache, refreshedAt: new Date().toISOString().slice(0, 10), skills, scans });
+  return { added: added.length, scanned: targets.length - errors.length, errors };
+}
+
+// ---------- localization (Japanese summaries supplied by the agent or user) ----------
+export async function setLocalized(source, name, text) {
+  if (!source || !isSafeName(name) || typeof text !== "string" || !text.trim()) throw new Error("source, name and text are required");
+  const cfg = await loadConfig();
+  await writeJson(CONFIG_PATH, { ...cfg, localized: { ...(cfg.localized ?? {}), [`${source}/${name}`]: text.trim().slice(0, 400) } });
+}
+
+// ---------- bundles ----------
+export async function installBundle({ bundleId, scope, cwd, overwrite = false }) {
+  const index = await loadIndex();
+  const bundle = index.bundles.find((b) => b.id === bundleId);
+  if (!bundle) throw new Error(`Bundle not found: ${bundleId}`);
+  const src = index.sources.find((s) => s.id === bundle.source);
+  if (!src) throw new Error(`Unknown source: ${bundle.source}`);
+  const results = [];
+  for (const name of bundle.installOrder?.length ? bundle.installOrder : bundle.skills) {
+    const skill = findSkill(index, name, bundle.source)[0];
+    if (!skill) {
+      results.push({ name, status: "missing" });
+      continue;
+    }
+    try {
+      results.push({ name, status: (await installSkill({ skill, source: src, scope, cwd, overwrite })).status });
+    } catch (e) {
+      results.push({ name, status: "error", error: String(e.message ?? e) });
+    }
+  }
+  return results;
+}
+
+// ---------- create a new skill scaffold ----------
+export async function createSkill({ name, description, scope, cwd }) {
+  if (!isSafeName(name)) throw new Error(`Unsafe skill name: ${name}`);
+  const dest = path.join(skillsRoot(scope, cwd), name);
+  if (await fs.stat(dest).then(() => true, () => false)) return { status: "exists", dest };
+  await fs.mkdir(dest, { recursive: true });
+  const desc = String(description ?? "").replace(/\r?\n/g, " ").trim() || "TODO: describe what this skill does and when to use it.";
+  await fs.writeFile(path.join(dest, "SKILL.md"), `---\nname: ${name}\ndescription: ${JSON.stringify(desc)}\n---\n\n# ${name}\n\n## When to use\n\n- TODO\n\n## Steps\n\n1. TODO\n`);
+  return { status: "created", dest };
+}
+
+// ---------- discover new skill repositories on GitHub ----------
+export async function webSearchSkills(query) {
+  const term = String(query ?? "").trim();
+  const run = async (q) => (await (await ghGet(`https://api.github.com/search/repositories?q=${encodeURIComponent(q)}&per_page=10`)).json()).items ?? [];
+  let items = await run(`${term} topic:agent-skills`);
+  if (items.length < 5) {
+    const seen = new Set(items.map((x) => x.id));
+    items = [...items, ...(await run(`${term} agent skills SKILL.md in:readme,description`)).filter((x) => !seen.has(x.id))].slice(0, 10);
+  }
+  return items.map((x) => ({ id: x.name, url: x.html_url, stars: x.stargazers_count, description: x.description ?? "", branch: x.default_branch }));
 }
 
 // ---------- search ----------
@@ -243,7 +363,7 @@ export async function installSkill({ skill, source, scope, cwd, overwrite }) {
   await fs.mkdir(root, { recursive: true });
   await fs.rename(tmp, dest);
   const state = await readJson(STATE_PATH, {});
-  state[dest] = { name: skill.name, source: source.id, path: skill.path, sha: files.treeSha };
+  state[dest] = { name: skill.name, source: source.id, path: skill.path, sha: files.treeSha, installedAt: new Date().toISOString() };
   await writeJson(STATE_PATH, state);
   return { status: "installed", dest, fileCount: files.length };
 }
@@ -314,7 +434,7 @@ export async function listInstalled(scope, cwd) {
     try {
       const fm = parseFrontmatter(await fs.readFile(path.join(root, e.name, "SKILL.md"), "utf8"));
       const rec = state[path.join(root, e.name)];
-      result.push({ dir: e.name, name: fm.name || e.name, description: fm.description || "", scope, managed: !!rec, source: rec?.source });
+      result.push({ dir: e.name, name: fm.name || e.name, description: fm.description || "", scope, managed: !!rec, source: rec?.source, installedAt: rec?.installedAt });
     } catch {
       // not a skill directory
     }

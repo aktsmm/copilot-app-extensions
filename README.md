@@ -12,15 +12,25 @@ GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストー�
   - `SKILL.md` のプレビュー、説明文の自動補完、日本語 / EN 切替
   - おすすめ: プロジェクトのファイル構成・`package.json`・README から導入候補を提示
   - 更新: 上流の変更を検出し「すべて更新」
-  - ソース: 追加 / 削除、再スキャン、**VS Code 版 Agent Skills Ninja からのインポート**（登録ソースとスキャン済みスキル）
+  - ソース: 追加 / 削除、再スキャン、**30 日以上未スキャンのソースを古い順に最大 5 件ずつ更新**、Web 検索（GitHub の `topic:agent-skills`）からのソース追加、**VS Code 版 Agent Skills Ninja からのインポート**、バンドルの一括インストール
+  - 日本語要約: カタログの日本語説明を表示。無いものは「日本語要約を追加」で保存（エージェントの `skill_ninja_localize_skill` でも可）
+  - インストール済み: ピン → 新しい順。`新規作成` で SKILL.md の雛形を作成
   - 削除は画面内で確認。user / project スコープ切替
 - **ツール**（エージェントから呼び出し可能）
   - `skill_ninja_search_skills` / `skill_ninja_install_skill` / `skill_ninja_uninstall_skill`
   - `skill_ninja_list_skills` / `skill_ninja_recommend_skills`
-  - `skill_ninja_update_skill_index`（ソースを走査して新しいスキルをキャッシュ）
+  - `skill_ninja_update_skill_index`（本家カタログの同期＋ソース走査。`stale=true` で 30 日超のみ）
   - `skill_ninja_check_updates`（インストール時のツリー SHA と比較）
   - `skill_ninja_add_source` / `skill_ninja_remove_source` / `skill_ninja_import_vscode`
-- スコープ: `user` = `~/.copilot/skills`、`project` = `<cwd>/.github/skills`
+  - `skill_ninja_install_bundle` / `skill_ninja_create_skill` / `skill_ninja_localize_skill` / `skill_ninja_web_search_skills`
+- スコープ:
+  - `user` = `~/.copilot/skills`: あなたの全プロジェクトで使える個人用
+  - `project` = `<cwd>/.github/skills`: そのリポジトリだけ。コミットしてチームで共有できる
+
+## カタログの更新
+
+- 同梱カタログ（`resources/skill-index.json`）は VS Code 版の公開カタログ由来です。更新するには `node scripts/sync-catalog.mjs`（`--local` を付けると手元の VS Code 版が持つ公式系ソースも取り込みます。`user-added` の個人ソースは除外）。
+- 実行時は `skill_ninja_update_skill_index` や UI の再スキャンで、VS Code 版の最新カタログ（`master` の `resources/skill-index.json`）との差分を `~/.copilot` のキャッシュへ取り込みます。
 
 ## 使い方
 
