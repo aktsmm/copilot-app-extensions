@@ -59,7 +59,9 @@ LICENSE               リポジトリ全体のライセンス
 
 ## 新しい拡張を追加する
 
-1. `.github/extensions/<name>/extension.mjs` を作成（Copilot App の `extensions_manage` の `scaffold` が使えます）
+> 開発者・エージェント向けの注意は [AGENTS.md](AGENTS.md) にまとめています（特に `install_extension` の 1 ファイル 1,000,000 バイト上限）。
+
+1.  `.github/extensions/<name>/extension.mjs` を作成（Copilot App の `extensions_manage` の `scaffold` が使えます）
 2. `README.md` と `test/` を同じフォルダに置く
 3. 上の「拡張機能一覧」に 1 行追加する
 4. `extensions_reload` で読み込みを確認し、`node --test` を通す
