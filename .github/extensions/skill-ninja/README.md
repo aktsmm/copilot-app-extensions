@@ -6,7 +6,7 @@ GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストー�
 ## 機能
 
 - **キャンバス UI**（右パネルの `Agent Skills Ninja`）
-  - 探す: キーワード検索、ソース絞り込み、★のみ表示、24 件ずつのページング、`/` で検索欄にフォーカス
+  - 探す: キーワード検索、**種別（公式 / Awesome リスト / コミュニティ）・ソース・カテゴリの絞り込み**、★のみ表示、24 件ずつのページング、`/` で検索欄にフォーカス
   - インストール状態の表示（「✓ インストール済み」→「削除」ボタン、他スコープ導入済み、手動導入、更新あり）
   - ★お気に入り / 📌ピン留め（ピンは一覧の先頭に表示）
   - `SKILL.md` のプレビュー、説明文の自動補完、日本語 / EN 切替
@@ -14,7 +14,7 @@ GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストー�
   - 更新: 上流の変更を検出し「すべて更新」
   - テーマ: 右上のセレクタで切り替え（自動 / ダーク / ライト / ニンジャ（紫）/ フォレスト（緑）/ サクラ（桜））。既定の「自動」は Copilot App（OS）のライト/ダークに追従し、選択は `~/.copilot/skill-ninja.json` に保存されます
   - ソース: 追加 / 削除、再スキャン、**30 日以上未スキャンのソースを古い順に最大 5 件ずつ更新**、Web 検索（GitHub の `topic:agent-skills`）からのソース追加、**VS Code 版 Agent Skills Ninja からのインポート**、バンドルの一括インストール
-  - 日本語要約: カタログの日本語説明を表示（公式ソースの訳は `resources/ja-descriptions.json` に同梱。カタログ同期で上書きされず、自分で保存した要約が優先）。無いものは「日本語要約を追加」で保存（エージェントの `skill_ninja_localize_skill` でも可）
+  - 日本語要約: 同梱カタログの説明は**約 1,870 件を日本語化済み**（公式ソースは全件、他も大半）。言語を「日本語」にすると日本語版が出ます。自分で保存した要約が最優先で、無いものは「日本語要約を追加」で保存（エージェントの `skill_ninja_localize_skill` でも可）
   - インストール済み: ピン → 新しい順。`新規作成` で SKILL.md の雛形を作成
   - 削除は画面内で確認。user / project スコープ切替
 - **ツール**（エージェントから呼び出し可能）
@@ -30,7 +30,9 @@ GitHub Copilot App 向けの Agent Skills（SKILL.md）検索・インストー�
 
 ## カタログの更新
 
-- 同梱カタログ（`resources/skill-index.json`）は VS Code 版の公開カタログ由来です。更新するには `node scripts/sync-catalog.mjs`（この拡張のフォルダで実行）（`--local` を付けると手元の VS Code 版が持つ公式系ソースも取り込みます。`user-added` の個人ソースは除外）。
+- 同梱カタログ（`resources/skill-index.json`、約 2,060 スキル / 24 ソース）は VS Code 版の公開カタログ由来です。更新するには `node scripts/sync-catalog.mjs`（この拡張のフォルダで実行）（`--local` を付けると手元の VS Code 版が持つ公式系ソースも取り込みます。`user-added` の個人ソースは除外）。
+- 同梱しないソースは `EXCLUDED_SOURCES`（`core/core.mjs`）で管理します。同期スクリプトと実行時の同期の両方で除外されます（現在: `microsoftdocs-agent-skills`）。
+- 日本語の説明は `resources/ja-descriptions.json`（キー: `ソースID/スキル名`）に分けて持ちます。カタログ同期で上書きされず、1 ファイル 1,000,000 バイトの上限にも影響しません。新規スキルの訳はこのファイルへ追記してください。
 - 実行時は `skill_ninja_update_skill_index` や UI の再スキャンで、VS Code 版の最新カタログ（`master` の `resources/skill-index.json`）との差分を `~/.copilot` のキャッシュへ取り込みます。
 
 ## 使い方
@@ -103,8 +105,10 @@ GitHub API のレート制限回避のため、`GITHUB_TOKEN`（承認制の環�
 
 ```
 cd .github/extensions/skill-ninja
-node --test test/core.test.mjs
+node --test test/*.test.mjs
 ```
+
+テストは実際のホームや共有ストアを書き換えません（`SKILL_NINJA_HOME` などを一時ディレクトリに向けています）。
 
 ## リンク・作者
 
