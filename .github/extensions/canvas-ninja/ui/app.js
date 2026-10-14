@@ -52,7 +52,7 @@ const instOf = (e, scope = S.scope) => S.installed.find((i) => i.name === e.name
 const pluginInstalled = (e) => S.plugins.some((p) => p.name === e.name && p.marketplace === e.marketplace);
 const sessionStatus = (i) => S.sessionExt.find((x) => x.name === i.name && x.source === i.scope);
 const hasUpdate = (name, scope) => S.updates.some((u) => u.name === name && u.scope === scope);
-const riskCls = (r) => (r === "high" ? "bad" : r === "medium" ? "warn" : "ok");
+const riskCls = (r) => (r === "high" ? "caut" : r === "medium" ? "warn" : "ok");
 const riskTag = (r) => (r ? `<span class="tag ${riskCls(r)}">${esc(T("risk.label", { r: T(`risk.${r}`) }))}</span>` : "");
 
 function stateTags(e) {
@@ -93,12 +93,27 @@ function renderBanners() {
   $("#banners").innerHTML = b.join("");
 }
 
+const bundleMatches = (b) => {
+  const kws = S.q.toLowerCase().split(/\s+/).filter(Boolean);
+  if (!kws.length) return true;
+  const hay = `${b.name.ja} ${b.name.en} ${b.description.ja} ${b.description.en} ${b.items.join(" ")}`.toLowerCase();
+  return kws.every((k) => hay.includes(k));
+};
+
 function renderToolbar() {
+  const hadFocus = document.activeElement?.id === "q";
+  const caret = hadFocus ? document.activeElement.selectionStart : 0;
+  renderToolbarInner();
+  if (hadFocus) { const q = $("#q"); if (q) { q.focus(); q.setSelectionRange(caret, caret); } }
+}
+
+function renderToolbarInner() {
   const tb = $("#toolbar");
   if (S.tab !== "search" && S.tab !== "official") return void (tb.innerHTML = "");
   const srcs = Object.entries(S.facets.sources ?? {});
-  const bundles = S.bundles.length
-    ? `${S.tab === "official" ? `<div class="hint">${T("official.hint")}</div>` : ""}<h3 class="sec">${T("official.bundles")}</h3><div class="bundles">${S.bundles.map((b) => `<div class="bundle"><div class="bhead"><span class="bicon">${esc(b.icon || "📦")}</span><b>${esc(b.name[S.lang] || b.name.en)}</b><span class="tag">${esc(T("bundle.items", { n: b.items.length }))}</span></div><div class="meta">${esc(b.description[S.lang] || b.description.en)}</div><div class="row" style="margin-top:6px"><button class="primary" data-a="bundle" data-id="${esc(b.id)}">${T("bundle.review")}</button></div></div>`).join("")}</div>`
+  const shownBundles = S.bundles.filter(bundleMatches);
+  const bundles = shownBundles.length
+    ? `${S.tab === "official" ? `<div class="hint">${T("official.hint")}</div>` : ""}<h3 class="sec">${T("official.bundles")}</h3><div class="bundles">${shownBundles.map((b) => `<div class="bundle"><div class="bhead"><span class="bicon">${esc(b.icon || "📦")}</span><b>${esc(b.name[S.lang] || b.name.en)}</b><span class="tag">${esc(T("bundle.items", { n: b.items.length }))}</span></div><div class="meta">${esc(b.description[S.lang] || b.description.en)}</div><div class="row" style="margin-top:6px"><button class="primary" data-a="bundle" data-id="${esc(b.id)}">${T("bundle.review")}</button></div></div>`).join("")}</div>`
     : "";
   tb.innerHTML = `${bundles}<div class="row"><div class="search"><input id="q" type="search" placeholder="${esc(T("search.placeholder"))}" value="${esc(S.q)}" autocomplete="off"></div>
     <span class="seg" title="${esc(T("search.destLabel"))}"><button data-a="scope" data-v="user" class="${S.scope === "user" ? "on" : ""}">user</button><button data-a="scope" data-v="project" class="${S.scope === "project" ? "on" : ""}">project</button></span></div>
@@ -213,8 +228,8 @@ function renderReview(e, rv) {
   const here = plugin ? null : instOf(e);
   let confirm = "";
   if (!S.busy.has(key)) {
-    const ack = rv.risk !== "low" ? `<label><input type="checkbox" id="ack" ${S.ack ? "checked" : ""}> ${T("confirm.ack", { high: rv.risk === "high" ? T("confirm.ackHigh") : "" })}</label>` : "";
-    const needAck = rv.risk !== "low" && !S.ack;
+    const ack = rv.risk === "high" ? `<label><input type="checkbox" id="ack" ${S.ack ? "checked" : ""}> ${T("confirm.ack", { high: rv.risk === "high" ? T("confirm.ackHigh") : "" })}</label>` : "";
+    const needAck = rv.risk === "high" && !S.ack;
     confirm = blocked
       ? `<div class="banner bad">${T(`confirm.blocked.${blocked.id}`)}</div>`
       : `<div class="confirm"><div><b>${T("confirm.what")}</b>: ${plugin ? T("confirm.plugin", { spec: esc(e.pluginSpec), commit: esc(rv.commit.slice(0, 7)) }) : `<span class="mono">${esc(rv.repo)}@${esc(rv.commit.slice(0, 7))}</span> → <span class="mono">${S.scope === "user" ? "~/.copilot/extensions" : ".github/extensions"}/${esc(e.name)}</span>（${esc(T("confirm.files", { n: rv.fileCount, kb: Math.round(rv.bytes / 1024) }))}）`}</div>
@@ -310,7 +325,7 @@ async function openBundle(id) {
     const rows = st.items.map((it) => `<div class="finding"><span class="dot ${it.rv?.risk === "high" ? "high" : it.rv?.risk === "medium" ? "medium" : "info"}"></span><div><b>${esc(it.e.displayName || it.e.name)}</b> ${it.rv ? riskTag(it.rv.risk) : it.err ? `<span class="tag bad">${esc(it.err)}</span>` : '<span class="spin"></span>'}${it.rv ? `<div class="meta">${contentsTags(it.rv.contents)} ${it.rv.findings.filter((f) => f.sev !== "info").slice(0, 4).map((f) => esc(findingText(S.lang, f))).join(" / ")}</div>` : ""}${it.result ? `<div class="meta">${it.result}</div>` : ""}</div></div>`).join("");
     const pre = st.prereq.map((p) => `<span class="tag ${p.ok === undefined ? "" : p.ok ? "ok" : "bad"}">${p.ok === undefined ? "…" : p.ok ? "✓" : "✗"} ${esc(T(`prereq.${p.id}`))}</span>`).join("");
     const ready = st.phase === "ready";
-    const needAck = st.items.some((i) => i.rv && i.rv.risk !== "low");
+    const needAck = st.items.some((i) => i.rv && i.rv.risk === "high");
     d.innerHTML = `<h3 style="margin-top:0">${esc(b.icon || "")} ${esc(b.name[S.lang] || b.name.en)} — ${T("bundle.title")}</h3>
       ${pre ? `<div class="meta">${T("bundle.prereq")}</div><div>${pre}</div>` : ""}${rows}
       <div class="note">⚠ ${T("risk.note")}</div>

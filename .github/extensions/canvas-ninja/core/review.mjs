@@ -7,12 +7,12 @@ const SEV = { info: 0, medium: 1, high: 2 };
 const SECRET_NAME = /(TOKEN|SECRET|KEY|PASSWORD|PASSWD|CREDENTIAL|COOKIE|PAT)\b/i;
 
 const RULES = [
-  { id: "child_process", sev: "high", re: /(?:from\s+|require\(\s*|import\(\s*)["'](?:node:)?child_process["']/ },
-  { id: "spawn-call", sev: "high", re: /\b(?:execFile|execFileSync|execSync|spawnSync|spawn)\s*\(/ },
+  { id: "child_process", sev: "medium", re: /(?:from\s+|require\(\s*|import\(\s*)["'](?:node:)?child_process["']/ },
+  { id: "spawn-call", sev: "medium", re: /\b(?:execFile|execFileSync|execSync|spawnSync|spawn)\s*\(/ },
   { id: "eval", sev: "high", re: /\beval\s*\(|new\s+Function\s*\(|\bFunction\s*\(\s*["'`]/ },
   { id: "dynamic-require", sev: "high", re: /\brequire\s*\(\s*(?:["'][^"']*["']\s*\+|[A-Za-z_$][\w$]*\s*[)+])|process\.binding\s*\(|process\.dlopen/ },
   { id: "auto-approve", sev: "high", re: /onPermissionRequest\s*:/ },
-  { id: "env-dump", sev: "high", re: /process\.env\s*(?:\)|,|;|\}|$)|Object\.(?:keys|entries|values)\(\s*process\.env|\.\.\.\s*process\.env/m },
+  { id: "env-dump", sev: "medium", re: /process\.env\s*(?:\)|,|;|\}|$)|Object\.(?:keys|entries|values)\(\s*process\.env|\.\.\.\s*process\.env/m },
   { id: "dynamic-import", sev: "medium", re: /import\(\s*[^"'`\s)]/ },
   { id: "fs-write", sev: "medium", re: /\b(?:writeFile|writeFileSync|appendFile|appendFileSync|createWriteStream|unlink|unlinkSync|rmSync|rmdir|rename|renameSync|copyFile)\s*\(|\bfs(?:\.promises)?\.rm\s*\(/ },
   { id: "network", sev: "medium", re: /\bfetch\s*\(|globalThis\s*\.\s*fetch|(?:from\s+|require\(\s*|import\(\s*)["'](?:node:)?(?:https?|net|tls|dgram|http2)["']|new\s+WebSocket\s*\(|\bXMLHttpRequest\b/ },
