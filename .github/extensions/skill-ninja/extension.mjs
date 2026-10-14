@@ -5,7 +5,7 @@ import { joinSession, createCanvas } from "@github/copilot-sdk/extension";
 
 import {
     loadIndex, searchSkills, findSkill, installSkill, uninstallSkill, listInstalled,
-    recommendSkills, skillsRoot, addSource, removeSource, refreshIndex, checkUpdates,
+    recommendSkills, skillsRoot, addSource, removeSource, refreshIndex, checkUpdates, importFromVsCode,
 } from "./core/core.mjs";
 import { startUiServer } from "./core/ui.mjs";
 
@@ -56,6 +56,18 @@ const session = await joinSession({
     requestedEnvironmentVariables: ["GITHUB_TOKEN"],
     canvases: [skillCanvas],
     tools: [
+        {
+            name: "skill_ninja_import_vscode",
+            description: "Import sources and scanned skills from the VS Code 'Agent Skills Ninja' extension data on this PC.",
+            skipPermission: true,
+            parameters: { type: "object", properties: {} },
+            handler: async () => {
+                const r = await importFromVsCode();
+                return r.files.length
+                    ? `Imported ${r.sources.length} source(s) [${r.sources.join(", ")}] and ${r.skills} skill(s) from:\n${r.files.join("\n")}`
+                    : "No VS Code Agent Skills Ninja data found on this PC.";
+            },
+        },
         {
             name: "skill_ninja_check_updates",
             description: "List installed skills whose upstream source changed since install.",

@@ -71,6 +71,45 @@ test("pagination, filters and facets", async () => {
   assert.equal(bySrc.total, f.sources[0].count);
 });
 
+test("favorites, pins, frontmatter, import from VS Code data", async () => {
+  const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
+  process.env.SKILL_NINJA_HOME = home;
+  const core = await import(`../core/core.mjs?fav=${Date.now()}`);
+  try {
+    assert.equal(await core.toggleFavorite("a/b"), true);
+    assert.deepEqual(await core.getFavorites(), ["a/b"]);
+    assert.equal(await core.toggleFavorite("a/b"), false);
+    assert.equal(await core.togglePin("a/b"), true);
+    assert.deepEqual(await core.getPins(), ["a/b"]);
+    assert.deepEqual(core.parseFrontmatter("---\nname: x\ndescription: >\n  line one\n  line two\n---\nbody"), { name: "x", description: "line one line two" });
+
+    const fake = path.join(home, "vsc-index.json");
+    await fs.writeFile(fake, JSON.stringify({
+      sources: [
+        { id: "my-private", url: "https://github.com/me/skills", type: "user-added" },
+        { id: "../evil", url: "https://github.com/x/y" },
+        { id: "bad-url", url: "https://example.com/x" },
+      ],
+      skills: [
+        { name: "hello", source: "my-private", path: "skills/hello", description: "hi", categories: [] },
+        { name: "orphan", source: "unknown", path: "skills/orphan" },
+        { name: "esc", source: "my-private", path: "../x" },
+      ],
+    }));
+    const r = await core.importFromVsCode([fake, path.join(home, "missing.json")]);
+    assert.deepEqual(r.sources, ["my-private"]);
+    assert.equal(r.skills, 1);
+    assert.equal((await core.importFromVsCode([fake])).skills, 0);
+    const idx = await core.loadIndex();
+    assert.ok(idx.sources.some((s) => s.id === "my-private"));
+    assert.ok(idx.skills.some((s) => s.name === "hello"));
+    assert.ok((await core.projectContext(process.cwd())).length > 0);
+  } finally {
+    delete process.env.SKILL_NINJA_HOME;
+    await fs.rm(home, { recursive: true, force: true });
+  }
+});
+
 test("install -> list -> uninstall (live GitHub)", async () => {
   const index = await loadIndex();
   const skill = index.skills.find((s) => s.source === "github-awesome-copilot");

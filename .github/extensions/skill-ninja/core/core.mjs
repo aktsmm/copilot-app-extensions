@@ -285,13 +285,21 @@ export async function uninstallSkill({ name, scope, cwd }) {
   return { status: "removed", dest };
 }
 
-function parseFrontmatter(text) {
+export function parseFrontmatter(text) {
   const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
   const out = {};
   if (!m) return out;
-  for (const line of m[1].split(/\r?\n/)) {
-    const kv = /^(name|description):\s*(.*)$/.exec(line);
-    if (kv) out[kv[1]] = kv[2].replace(/^["']|["']$/g, "").trim();
+  const lines = m[1].split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const kv = /^(name|description):\s*(.*)$/.exec(lines[i]);
+    if (!kv) continue;
+    let v = kv[2].trim();
+    if (/^[>|][+-]?$/.test(v)) {
+      const parts = [];
+      while (i + 1 < lines.length && /^\s+\S/.test(lines[i + 1])) parts.push(lines[++i].trim());
+      v = parts.join(" ");
+    }
+    out[kv[1]] = v.replace(/^["']|["']$/g, "").trim();
   }
   return out;
 }
@@ -299,17 +307,138 @@ function parseFrontmatter(text) {
 export async function listInstalled(scope, cwd) {
   const root = skillsRoot(scope, cwd);
   const entries = await fs.readdir(root, { withFileTypes: true }).catch(() => []);
+  const state = await readJson(STATE_PATH, {});
   const result = [];
   for (const e of entries) {
     if (!e.isDirectory()) continue;
     try {
       const fm = parseFrontmatter(await fs.readFile(path.join(root, e.name, "SKILL.md"), "utf8"));
-      result.push({ dir: e.name, name: fm.name || e.name, description: fm.description || "", scope });
+      const rec = state[path.join(root, e.name)];
+      result.push({ dir: e.name, name: fm.name || e.name, description: fm.description || "", scope, managed: !!rec, source: rec?.source });
     } catch {
       // not a skill directory
     }
   }
   return result;
+}
+
+// ---------- preview / description ----------
+const mdCache = new Map();
+export async function fetchSkillMd(source, skill) {
+  if (!isSafeRelPath(skill.path)) throw new Error(`Unsafe skill path: ${skill.path}`);
+  const k = `${source.id}/${skill.path}`;
+  if (mdCache.has(k)) return mdCache.get(k);
+  const { owner, repo } = parseRepo(source.url);
+  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${skill.path.split("/").map(encodeURIComponent).join("/")}/SKILL.md?ref=${encodeURIComponent(source.branch || "main")}`;
+  const text = await (await ghGet(url, "application/vnd.github.raw+json")).text();
+  mdCache.set(k, text);
+  return text;
+}
+
+// Fill in a missing description from SKILL.md and persist it in the index cache.
+export async function describeSkill(index, skill) {
+  if (skill.description) return skill.description;
+  const source = index.sources.find((s) => s.id === skill.source);
+  if (!source) return "";
+  const desc = parseFrontmatter(await fetchSkillMd(source, skill)).description ?? "";
+  const cache = await readJson(CACHE_PATH, { skills: [] });
+  const hit = (cache.skills ?? []).find((s) => s.source === skill.source && s.path === skill.path);
+  if (hit && desc) {
+    hit.description = desc;
+    await writeJson(CACHE_PATH, cache);
+  }
+  return desc;
+}
+
+// ---------- favorites ----------
+export async function getFavorites() {
+  return (await loadConfig()).favorites ?? [];
+}
+
+export async function toggleFavorite(key) {
+  return toggleListed("favorites", key);
+}
+
+// ---------- pins (shown first in lists) ----------
+export async function getPins() {
+  return (await loadConfig()).pins ?? [];
+}
+
+export async function togglePin(key) {
+  return toggleListed("pins", key);
+}
+
+async function toggleListed(field, key) {
+  if (typeof key !== "string" || !key) throw new Error("invalid key");
+  const cfg = await loadConfig();
+  const set = new Set(cfg[field] ?? []);
+  const on = !set.delete(key) && set.add(key).has(key);
+  await writeJson(CONFIG_PATH, { ...cfg, [field]: [...set] });
+  return on;
+}
+
+// ---------- import from the VS Code "Agent Skills Ninja" extension ----------
+export function vscodeIndexCandidates() {
+  const appData = process.env.APPDATA || path.join(os.homedir(), ".config");
+  const mac = path.join(os.homedir(), "Library", "Application Support");
+  const bases = process.platform === "darwin" ? [mac] : [appData];
+  const out = [];
+  for (const b of bases) {
+    for (const app of ["Code", "Code - Insiders"]) {
+      out.push(path.join(b, app, "User", "globalStorage", "yamapan.agent-skill-ninja", "skill-index.json"));
+    }
+  }
+  out.push(path.join(os.homedir(), ".skill-ninja", "skill-index.json"));
+  return out;
+}
+
+export async function importFromVsCode(files = vscodeIndexCandidates()) {
+  const bundled = JSON.parse(await fs.readFile(BUNDLED_INDEX, "utf8"));
+  const cfg = await loadConfig();
+  const knownSources = new Set([...(bundled.sources ?? []), ...(cfg.sources ?? [])].map((s) => s.id));
+  const cache = await readJson(CACHE_PATH, { skills: [] });
+  const knownSkills = new Set([...(bundled.skills ?? []), ...(cache.skills ?? [])].map((s) => `${s.source}/${s.path}`));
+  const addedSources = [];
+  const addedSkills = [];
+  const used = [];
+  for (const file of files) {
+    const idx = await readJson(file, null);
+    if (!idx || !Array.isArray(idx.sources)) continue;
+    used.push(file);
+    for (const s of idx.sources) {
+      if (!s?.id || !isSafeName(s.id) || knownSources.has(s.id)) continue;
+      try {
+        parseRepo(s.url);
+      } catch {
+        continue;
+      }
+      knownSources.add(s.id);
+      addedSources.push({ id: s.id, name: s.name || s.id, url: s.url, type: s.type || "community", ...(s.branch ? { branch: s.branch } : {}), description: s.description || "" });
+    }
+    for (const sk of idx.skills ?? []) {
+      const k = `${sk.source}/${sk.path}`;
+      if (!sk?.name || !isSafeName(sk.name) || !isSafeRelPath(sk.path) || !knownSources.has(sk.source) || knownSkills.has(k)) continue;
+      knownSkills.add(k);
+      addedSkills.push({ name: sk.name, source: sk.source, path: sk.path, categories: sk.categories ?? [], description: sk.description ?? "", description_ja: sk.description_ja ?? "" });
+    }
+  }
+  if (addedSources.length) await writeJson(CONFIG_PATH, { ...cfg, sources: [...(cfg.sources ?? []), ...addedSources] });
+  if (addedSkills.length) await writeJson(CACHE_PATH, { ...cache, refreshedAt: cache.refreshedAt ?? new Date().toISOString().slice(0, 10), skills: [...(cache.skills ?? []), ...addedSkills] });
+  return { files: used, sources: addedSources.map((s) => s.id), skills: addedSkills.length };
+}
+
+// ---------- project-aware recommendation context ----------
+export async function projectContext(cwd) {
+  const parts = [];
+  const entries = await fs.readdir(cwd, { withFileTypes: true }).catch(() => []);
+  parts.push(...entries.map((e) => e.name.replace(/\.[^.]+$/, "")));
+  const pkg = await readJson(path.join(cwd, "package.json"), null);
+  if (pkg) parts.push(...Object.keys({ ...pkg.dependencies, ...pkg.devDependencies }).slice(0, 40), pkg.name ?? "", pkg.description ?? "");
+  const exts = new Set(entries.map((e) => path.extname(e.name).slice(1)).filter(Boolean));
+  parts.push(...exts);
+  const readme = await fs.readFile(path.join(cwd, "README.md"), "utf8").catch(() => "");
+  parts.push(readme.slice(0, 600));
+  return parts.join(" ");
 }
 
 // ---------- recommend ----------
