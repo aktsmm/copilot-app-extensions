@@ -1,0 +1,47 @@
+{
+  "bundles": [
+    {
+      "id": "azure-canvases",
+      "icon": "☁",
+      "name": { "ja": "Azure キャンバス スターター", "en": "Azure canvases starter" },
+      "description": {
+        "ja": "Azure リソースの閲覧、コストの健全性チェック、Functions のホステッドスキルを Copilot App で。",
+        "en": "Browse Azure resources, check cost health and build Functions hosted skills in the Copilot App."
+      },
+      "items": [
+        "plugin:awesome-copilot-plugins/azure-resources-query",
+        "plugin:awesome-copilot-plugins/azure-cost-health-check",
+        "plugin:awesome-copilot-plugins/azure-functions-hosted-skills"
+      ],
+      "prereq": ["az", "az-login"]
+    },
+    {
+      "id": "azure-operate",
+      "icon": "🛟",
+      "name": { "ja": "Azure 運用", "en": "Azure operations" },
+      "description": {
+        "ja": "SRE エージェントでの障害調査と、コネクタ名前空間の管理。",
+        "en": "Investigate failing apps with the Azure SRE Agent and manage connector namespaces."
+      },
+      "items": [
+        "plugin:awesome-copilot-plugins/azure-sre-agent",
+        "plugin:awesome-copilot-plugins/connector-namespaces"
+      ],
+      "prereq": ["az", "az-login"]
+    },
+    {
+      "id": "microsoft-ai",
+      "icon": "🧠",
+      "name": { "ja": "Microsoft AI / ドキュメント", "en": "Microsoft AI & docs" },
+      "description": {
+        "ja": "Foundry のキャンバスと、公式ドキュメント検索（Microsoft Learn MCP）。",
+        "en": "The Foundry canvas and official documentation search (Microsoft Learn MCP)."
+      },
+      "items": [
+        "plugin:awesome-copilot-plugins/microsoft-foundry",
+        "plugin:awesome-copilot-plugins/microsoft-docs"
+      ],
+      "prereq": []
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ja" data-theme="auto">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent Canvas Ninja</title>
+<link rel="stylesheet" href="/app.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">🥷</span>
+    <div><h1>Agent Canvas Ninja</h1><div class="sub" id="sub"></div></div>
+    <div class="tools">
+      <span class="seg" id="langseg" role="group" aria-label="Language"><button data-lang="ja">日本語</button><button data-lang="en">EN</button></span>
+      <select id="theme" aria-label="Theme" data-i18n-title="theme.title">
+        <option value="auto" data-i18n="theme.auto"></option><option value="dark" data-i18n="theme.dark"></option><option value="light" data-i18n="theme.light"></option>
+        <option value="ninja" data-i18n="theme.ninja"></option><option value="forest" data-i18n="theme.forest"></option><option value="sakura" data-i18n="theme.sakura"></option>
+        <option value="ocean" data-i18n="theme.ocean"></option><option value="sunset" data-i18n="theme.sunset"></option>
+      </select>
+      <button id="about" class="ghost" data-i18n-title="about.title" aria-label="About">ⓘ</button>
+    </div>
+  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="search" class="on"><span data-i18n="tab.search"></span></button>
+    <button data-tab="official"><span data-i18n="tab.official"></span></button>
+    <button data-tab="installed"><span data-i18n="tab.installed"></span> <span class="count" id="n-inst"></span></button>
+    <button data-tab="updates"><span data-i18n="tab.updates"></span> <span class="count" id="n-upd"></span></button>
+    <button data-tab="sources"><span data-i18n="tab.sources"></span> <span class="count warn" id="n-prob"></span></button>
+  </nav>
+  <div id="banners"></div>
+</header>
+<main id="main">
+  <section id="listpane" class="pane">
+    <div id="toolbar" class="toolbar"></div>
+    <div id="list" class="list"></div>
+  </section>
+  <aside id="detail" class="detail" hidden></aside>
+</main>
+<div id="toast" role="status"></div>
+<dialog id="dlg"></dialog>
+<script src="/app.js" type="module"></script>
+</body>
+</html>
