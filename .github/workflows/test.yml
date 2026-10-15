@@ -33,3 +33,5 @@ jobs:
         with:
           node-version: 22
       - run: node --test test/*.test.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
