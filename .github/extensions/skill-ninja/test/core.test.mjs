@@ -247,7 +247,7 @@ test("theme persists and is injected server-side", async () => {
   }
 });
 
-test("stale sources, localize, create skill, upstream sync, web search", async () => {
+test("stale sources, localize, create skill, upstream sync, web search", async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), "snh-"));
   process.env.SKILL_NINJA_HOME = home;
   const core = await import(`../core/core.mjs?stale=${Date.now()}`);
@@ -286,6 +286,9 @@ test("stale sources, localize, create skill, upstream sync, web search", async (
     assert.ok(Array.isArray(hits));
     const b = await core.installBundle({ bundleId: idx.bundles[0].id, scope: "project", cwd }).catch((e) => e);
     assert.ok(Array.isArray(b));
+  } catch (e) {
+    if (e.kind === "rate") return t.skip("GitHub API rate limit");
+    throw e;
   } finally {
     delete process.env.SKILL_NINJA_HOME;
     await fs.rm(home, { recursive: true, force: true });
@@ -293,13 +296,20 @@ test("stale sources, localize, create skill, upstream sync, web search", async (
   }
 });
 
-test("install -> list -> uninstall (live GitHub)", async () => {
+test("install -> list -> uninstall (live GitHub)", async (t) => {
   const index = await loadIndex();
   const skill = index.skills.find((s) => s.source === "github-awesome-copilot");
   const source = index.sources.find((s) => s.id === skill.source);
   const cwd = await fs.mkdtemp(path.join(os.tmpdir(), "sn-"));
   try {
-    assert.equal((await installSkill({ skill, source, scope: "project", cwd })).status, "installed");
+    let first;
+    try {
+      first = await installSkill({ skill, source, scope: "project", cwd });
+    } catch (e) {
+      if (e.kind === "rate") return t.skip("GitHub API rate limit");
+      throw e;
+    }
+    assert.equal(first.status, "installed");
     assert.equal((await installSkill({ skill, source, scope: "project", cwd })).status, "exists");
     assert.equal((await listInstalled("project", cwd)).length, 1);
     assert.equal((await uninstallSkill({ name: skill.name, scope: "project", cwd })).status, "removed");

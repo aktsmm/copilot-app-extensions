@@ -9,6 +9,7 @@
 | 拡張 | 概要 | フォルダ |
 | --- | --- | --- |
 | 🥷 **Agent Skills Ninja** | Agent Skills（SKILL.md）の検索・インストール・更新・管理。約 2,060 スキルを同梱し、説明は日本語対応（約 1,870 件）。種別（公式/コミュニティ）での絞り込み、キャンバス UI、VS Code 版との連携つき | [`.github/extensions/skill-ninja`](.github/extensions/skill-ninja/README.md) |
+| 🧩 **Agent Canvas Ninja** | Canvas 拡張と公式プラグイン（Azure / Microsoft など）の検索・リスクレビュー・インストール。レビュー ID に紐づく固定コミットのインストール、おすすめセットとマイセット、日本語 / English、テーマ 8 種 | [`.github/extensions/canvas-ninja`](.github/extensions/canvas-ninja/README.md) |
 
 ## インストール
 
@@ -21,7 +22,7 @@ Copilot App のチャットで次のように頼みます。
 > 「`https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/skill-ninja` を install_extension でインストールして」
 
 - 入れる場所は `user`（全プロジェクト共通・おすすめ）、`project`（そのリポジトリのみ）、`session`（このセッションのみ）から選べます。
-- 入れたあとは自動で再読み込みされます。「Agent Skills Ninja を開いて」と頼むとキャンバスが開きます。
+- 入れたあとは自動で再読み込みされます。「Agent Skills Ninja を開いて」「Agent Canvas Ninja を開いて」と頼むとキャンバスが開きます。Canvas Ninja は .../extensions/canvas-ninja の URL で入ります。
 
 ### 他の拡張を入れるとき
 
@@ -38,7 +39,7 @@ https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/<n
 ### 補足
 
 - このリポジトリを開いたセッションでは、`.github/extensions/` 配下の拡張がインストールなしでそのまま読み込まれます。
-- `install_extension` には **1 ファイル 1,000,000 バイトまで**という上限があります。大きなデータを同梱する拡張は、この範囲に収めてください（Agent Skills Ninja のカタログは約 0.76MB、日本語訳は約 0.3MB で、いずれも別ファイル。`scripts/sync-catalog.mjs` と `test/limits.test.mjs` が超過をチェックします）。
+- `install_extension` には **1 ファイル 1,000,000 バイトまで**という上限があります。大きなデータを同梱する拡張は、この範囲に収めてください（Agent Skills Ninja のカタログは約 0.76MB、日本語訳は約 0.3MB で、いずれも別ファイル。`scripts/sync-catalog.mjs` と各拡張の `test/limits.test.mjs` が超過をチェックします）。
 - 動作確認済み: 現在の main の URL から、実際にインストールできることを検証しました。
 
 > `install_extension` で URL を指定するには、リポジトリが公開されているか、GitHub へのアクセス権（private の場合）が必要です。
@@ -52,6 +53,7 @@ https://github.com/aktsmm/copilot-app-extensions/tree/main/.github/extensions/<n
     core/             ロジック（拡張ごとに自己完結）
     test/             node:test
     README.md         拡張ごとのドキュメント
+.github/workflows/    CI（全拡張のテスト、Canvas Ninja のカタログ同期）
 LICENSE               リポジトリ全体のライセンス
 ```
 
